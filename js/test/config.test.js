@@ -11,18 +11,24 @@ test("loads Edge scanner configuration for either network", () => {
     ALEO_VIEW_KEY_FILE: "/secure/account.viewkey",
     ALEO_NETWORK: "mainnet",
     SCAN_START_BLOCK: "42",
+    RECORD_STORE_FILE: "/secure/unspent-records.json",
   });
 
   assert.equal(config.network, "mainnet");
   assert.equal(config.scannerUrl, "https://edge.provable.com/api/scanner");
   assert.equal(config.startBlock, 42);
   assert.equal(config.keyKind, "view");
+  assert.equal(config.recordStorePrivate, true);
 });
 
 test("rejects invalid network and start block values", () => {
-  const base = { ALEO_VIEW_KEY_FILE: "/secure/key" };
+  const base = {
+    ALEO_VIEW_KEY_FILE: "/secure/key",
+    RECORD_STORE_FILE: "/secure/records.json",
+  };
   assert.throws(() => loadConfig({ ...base, ALEO_NETWORK: "devnet" }), /ALEO_NETWORK/);
   assert.throws(() => loadConfig({ ...base, SCAN_START_BLOCK: "-1" }), /SCAN_START_BLOCK/);
+  assert.throws(() => loadConfig({ ...base, RECORD_STORE_PRIVATE: "sometimes" }), /true or false/);
 });
 
 test("reads only an owner-only regular view-key file", () => {
@@ -45,7 +51,7 @@ test("reads only an owner-only regular view-key file", () => {
 });
 
 test("accepts exactly one secure key-file source", () => {
-  const common = {};
+  const common = { RECORD_STORE_FILE: "/secure/records.json" };
   const privateConfig = loadConfig({ ...common, ALEO_PRIVATE_KEY_FILE: "/secure/private" });
   assert.equal(privateConfig.keyKind, "private");
   assert.equal(privateConfig.keyFile, "/secure/private");

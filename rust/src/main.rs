@@ -1,6 +1,7 @@
 use anyhow::Result;
 use autojoin_bot::{
-    AleoNetwork, Config, KeySource, ScanResult, ScannerClient, read_secure_key_file,
+    AleoNetwork, Config, KeySource, RecordStoreOptions, ScanResult, ScannerClient,
+    read_secure_key_file, write_record_store,
 };
 use snarkvm_console::{
     account::{PrivateKey, ViewKey},
@@ -47,6 +48,37 @@ async fn main() -> Result<()> {
         AleoNetwork::Mainnet => run::<MainnetV0>(&config).await?,
         AleoNetwork::Testnet => run::<TestnetV0>(&config).await?,
     };
-    println!("{}", serde_json::to_string_pretty(&result)?);
+    write_record_store(
+        &config.record_store_file,
+        config.network,
+        &result.uuid,
+        &result.records,
+        RecordStoreOptions {
+            secure: config.record_store_private,
+            include_plaintext: false,
+        },
+    )?;
+    if let Some(path) = &config.decrypted_record_store_file {
+        write_record_store(
+            path,
+            config.network,
+            &result.uuid,
+            &result.records,
+            RecordStoreOptions {
+                secure: true,
+                include_plaintext: true,
+            },
+        )?;
+    }
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "network": config.network.as_str(),
+            "uuid": result.uuid,
+            "record_count": result.records.len(),
+            "record_store": config.record_store_file,
+            "decrypted_record_store": config.decrypted_record_store_file,
+        }))?
+    );
     Ok(())
 }

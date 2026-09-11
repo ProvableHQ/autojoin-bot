@@ -1,5 +1,6 @@
 import { loadConfig, loadSdk, readSecureKeyFile } from "./config.js";
 import { registerAndFetchUnspentRecords } from "./scanner.js";
+import { writeRecordStore } from "./store.js";
 
 async function main() {
   const config = loadConfig();
@@ -17,8 +18,31 @@ async function main() {
     viewKey = sdk.ViewKey.from_string(encodedKey);
   }
   const result = await registerAndFetchUnspentRecords({ sdk, viewKey, ...config });
+  writeRecordStore({
+    path: config.recordStoreFile,
+    network: config.network,
+    uuid: result.uuid,
+    records: result.records,
+    secure: config.recordStorePrivate,
+  });
+  if (config.decryptedRecordStoreFile) {
+    writeRecordStore({
+      path: config.decryptedRecordStoreFile,
+      network: config.network,
+      uuid: result.uuid,
+      records: result.records,
+      includePlaintext: true,
+      secure: true,
+    });
+  }
 
-  process.stdout.write(`${JSON.stringify({ network: config.network, ...result }, null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify({
+    network: config.network,
+    uuid: result.uuid,
+    recordCount: result.records.length,
+    recordStore: config.recordStoreFile,
+    decryptedRecordStore: config.decryptedRecordStoreFile,
+  }, null, 2)}\n`);
 }
 
 main().catch((error) => {

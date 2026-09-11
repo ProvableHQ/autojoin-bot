@@ -12,6 +12,13 @@ function parseStartBlock(value) {
   return parsed;
 }
 
+function parseBoolean(value, name, defaultValue) {
+  if (value === undefined || value.trim() === "") return defaultValue;
+  if (value.toLowerCase() === "true") return true;
+  if (value.toLowerCase() === "false") return false;
+  throw new Error(`${name} must be true or false`);
+}
+
 export function loadConfig(env = process.env) {
   const network = (env.ALEO_NETWORK ?? "testnet").trim().toLowerCase();
   if (network !== "mainnet" && network !== "testnet") {
@@ -23,11 +30,20 @@ export function loadConfig(env = process.env) {
   if (Boolean(viewKeyFile) === Boolean(privateKeyFile)) {
     throw new Error("exactly one of ALEO_VIEW_KEY_FILE or ALEO_PRIVATE_KEY_FILE is required");
   }
+  const recordStoreFile = env.RECORD_STORE_FILE?.trim();
+  if (!recordStoreFile) throw new Error("RECORD_STORE_FILE is required");
+  const decryptedRecordStoreFile = env.DECRYPTED_RECORD_STORE_FILE?.trim() || undefined;
+  if (decryptedRecordStoreFile === recordStoreFile) {
+    throw new Error("DECRYPTED_RECORD_STORE_FILE must differ from RECORD_STORE_FILE");
+  }
 
   return {
     network,
     recordName: env.RECORD_NAME?.trim() || undefined,
     recordProgram: env.RECORD_PROGRAM?.trim() || undefined,
+    decryptedRecordStoreFile,
+    recordStoreFile,
+    recordStorePrivate: parseBoolean(env.RECORD_STORE_PRIVATE, "RECORD_STORE_PRIVATE", true),
     scannerUrl: SCANNER_URL,
     startBlock: parseStartBlock(env.SCAN_START_BLOCK),
     keyFile: viewKeyFile || privateKeyFile,
