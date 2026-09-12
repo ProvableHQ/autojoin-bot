@@ -50,10 +50,33 @@ impl DelegatedProverClient {
         family: RecordFamily,
         records: &[&OwnedRecord],
     ) -> Result<Value> {
-        let (program_id, function_name) = join_call(family, network, records.len())
-            .with_context(|| format!("{} join size must be between 2 and 16", family.name()))?;
-        let programs = self.fetch_program_graph::<N>(network, program_id).await?;
-        let authorization = authorize::<N, A>(private_key, records, &programs, function_name)?;
+        let (program_id, function_name) =
+            join_call(family, network, records.len()).with_context(|| {
+                format!(
+                    "{} join size must be between 2 and {} for {}",
+                    family.name(),
+                    family.max_batch(),
+                    network.as_str()
+                )
+            })?;
+        let mut roots = vec![program_id];
+        if family.token_identifier(network).is_some() {
+            roots.push(
+                family
+                    .record_program(network)
+                    .context("ARC20 autojoin is not configured for this network")?,
+            );
+        }
+        let programs = self.fetch_program_graph::<N>(network, &roots).await?;
+        let authorization = authorize::<N, A>(
+            private_key,
+            family,
+            network,
+            records,
+            &programs,
+            program_id,
+            function_name,
+        )?;
         let request = json!({
             "broadcast": true,
             "job_id": format!("{:032x}", rand::random::<u128>()),
@@ -68,9 +91,12 @@ impl DelegatedProverClient {
     async fn fetch_program_graph<N: Network>(
         &self,
         network: AleoNetwork,
-        root_program: &str,
+        root_programs: &[&str],
     ) -> Result<Vec<Program<N>>> {
-        let mut pending = vec![root_program.to_owned()];
+        let mut pending = root_programs
+            .iter()
+            .map(|program| (*program).to_owned())
+            .collect::<Vec<_>>();
         let mut programs = HashMap::new();
 
         while let Some(program_id) = pending.pop() {
@@ -89,7 +115,7 @@ impl DelegatedProverClient {
             programs.insert(program_id, program);
         }
 
-        topological_programs(programs, root_program)
+        topological_programs(programs)
     }
 
     async fn submit(&self, request: Value) -> Result<Value> {
@@ -142,11 +168,17 @@ impl DelegatedProverClient {
 
 fn authorize<N: Network, A: Aleo<Network = N>>(
     private_key: &PrivateKey<N>,
+    family: RecordFamily,
+    network: AleoNetwork,
     records: &[&OwnedRecord],
     programs: &[Program<N>],
+    root_program: &str,
     function_name: &str,
 ) -> Result<snarkvm_synthesizer::Authorization<N>> {
-    let program = programs.last().context("autojoin program graph is empty")?;
+    let program = programs
+        .iter()
+        .find(|program| program.id().to_string() == root_program)
+        .context("autojoin root program is missing")?;
     let process = Process::<N>::load().context("failed to initialize authorization process")?;
     for dependency in programs {
         process
@@ -154,18 +186,28 @@ fn authorize<N: Network, A: Aleo<Network = N>>(
             .add_program(dependency)
             .with_context(|| format!("failed to load {}", dependency.id()))?;
     }
-    let inputs = records
-        .iter()
-        .map(|record| {
-            ProgramValue::<N>::from_str(
-                record
-                    .record_plaintext
-                    .as_deref()
-                    .expect("credits records were validated"),
-            )
-            .context("scanner returned an invalid credits record plaintext")
-        })
-        .collect::<Result<Vec<_>>>()?;
+    let mut inputs =
+        Vec::with_capacity(records.len() + usize::from(family.token_identifier(network).is_some()));
+    if let Some(token_identifier) = family.token_identifier(network) {
+        inputs.push(
+            ProgramValue::<N>::from_str(&format!("'{token_identifier}'"))
+                .context("invalid ARC20 token program identifier")?,
+        );
+    }
+    inputs.extend(
+        records
+            .iter()
+            .map(|record| {
+                ProgramValue::<N>::from_str(
+                    record
+                        .record_plaintext
+                        .as_deref()
+                        .expect("owned records were validated"),
+                )
+                .context("scanner returned an invalid record plaintext")
+            })
+            .collect::<Result<Vec<_>>>()?,
+    );
     process
         .authorize::<A, _>(
             private_key,
@@ -179,7 +221,6 @@ fn authorize<N: Network, A: Aleo<Network = N>>(
 
 fn topological_programs<N: Network>(
     mut programs: HashMap<String, Program<N>>,
-    root_program: &str,
 ) -> Result<Vec<Program<N>>> {
     let mut ordered = Vec::with_capacity(programs.len());
     let mut loaded = std::collections::HashSet::from(["credits.aleo".to_owned()]);
@@ -198,19 +239,6 @@ fn topological_programs<N: Network>(
         ordered.push(program);
     }
 
-    if ordered
-        .last()
-        .map(|program| program.id().to_string())
-        .as_deref()
-        != Some(root_program)
-    {
-        let position = ordered
-            .iter()
-            .position(|program| program.id().to_string() == root_program)
-            .context("autojoin root program is missing")?;
-        let root = ordered.remove(position);
-        ordered.push(root);
-    }
     Ok(ordered)
 }
 
@@ -247,6 +275,16 @@ pub const fn join_call(
         (RecordFamily::Usdcx, AleoNetwork::Testnet, 15..=16) => {
             "test_aj_usdcx_stablecoin_15_16.aleo"
         }
+        (
+            RecordFamily::Arc20Eth | RecordFamily::Arc20Sol | RecordFamily::Arc20Wbtc,
+            AleoNetwork::Mainnet,
+            2..=15,
+        ) => "main_aj_arc20_2_15.aleo",
+        (
+            RecordFamily::Arc20Eth | RecordFamily::Arc20Sol | RecordFamily::Arc20Wbtc,
+            AleoNetwork::Testnet,
+            2..=15,
+        ) => "test_aj_arc20_2_15.aleo",
         _ => return None,
     };
     let function = match count {
@@ -317,6 +355,18 @@ mod tests {
             join_call(RecordFamily::Usdcx, AleoNetwork::Testnet, 16),
             Some(("test_aj_usdcx_stablecoin_15_16.aleo", "join_16"))
         );
+        assert_eq!(
+            join_call(RecordFamily::Arc20Eth, AleoNetwork::Mainnet, 15),
+            Some(("main_aj_arc20_2_15.aleo", "join_15"))
+        );
+        assert_eq!(
+            join_call(RecordFamily::Arc20Wbtc, AleoNetwork::Mainnet, 16),
+            None
+        );
+        assert_eq!(
+            join_call(RecordFamily::Arc20Sol, AleoNetwork::Testnet, 2),
+            Some(("test_aj_arc20_2_15.aleo", "join_2"))
+        );
     }
 
     #[test]
@@ -333,8 +383,13 @@ mod tests {
             ("root.aleo".to_owned(), root),
             ("dependency.aleo".to_owned(), dependency),
         ]);
-        let ordered = topological_programs(programs, "root.aleo").unwrap();
+        let ordered = topological_programs(programs).unwrap();
         assert_eq!(ordered[0].id().to_string(), "dependency.aleo");
         assert_eq!(ordered[1].id().to_string(), "root.aleo");
+    }
+
+    #[test]
+    fn arc20_program_identifier_is_a_valid_public_input() {
+        assert!(ProgramValue::<TestnetV0>::from_str("'arc20_eth'").is_ok());
     }
 }

@@ -42,6 +42,9 @@ Optional variables:
   proving. A private key and `DELEGATED_PROVING_URL` are then required.
 - `AUTOJOIN_USDCX`: defaults to `false`. When `true`, applies the same
   iterative delegated-proving flow to USDCx `Token` records.
+- `AUTOJOIN_ARC20_ETH`, `AUTOJOIN_ARC20_SOL`, and `AUTOJOIN_ARC20_WBTC`:
+  independently enable consolidation for those ARC20 `Token` records on the
+  selected network.
 - `DELEGATED_PROVING_TOKEN_FILE`: optional owner-only file containing the
   prover bearer token. The token is never accepted directly from the command
   line or environment.
@@ -69,6 +72,14 @@ USDCx uses `usdcx_stablecoin.aleo/Token` on mainnet and
 `test_aj_usdcx_stablecoin_*` program ID. Each calls `join_N` for the selected
 batch size. The Rust authorization loader recursively fetches and registers
 the stablecoin program's import graph before signing the nested calls.
+
+ARC20 joins use `main_aj_arc20_2_15.aleo/join_N` on mainnet and
+`test_aj_arc20_2_15.aleo/join_N` on testnet for batches of 2–15. The public
+token identifier literal is also network-specific—for example, `'arc20_eth'`
+or `'test_arc20_eth'`—and is prepended to the dynamic record inputs. The Rust
+loader explicitly registers the selected token program and its transitive
+imports before authorization. Sixteen records are therefore reduced with
+`join_15` followed by `join_2`.
 
 The selected endpoint is
 `https://edge.provable.com/api/scanner/{mainnet|testnet}`. Edge is used as an

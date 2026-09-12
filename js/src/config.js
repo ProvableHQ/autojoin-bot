@@ -47,12 +47,17 @@ export function loadConfig(env = process.env) {
   }
   const autojoinCredits = parseBoolean(env.AUTOJOIN_CREDITS, "AUTOJOIN_CREDITS", false);
   const autojoinUsdcx = parseBoolean(env.AUTOJOIN_USDCX, "AUTOJOIN_USDCX", false);
+  const autojoinArc20Eth = parseBoolean(env.AUTOJOIN_ARC20_ETH, "AUTOJOIN_ARC20_ETH", false);
+  const autojoinArc20Sol = parseBoolean(env.AUTOJOIN_ARC20_SOL, "AUTOJOIN_ARC20_SOL", false);
+  const autojoinArc20Wbtc = parseBoolean(env.AUTOJOIN_ARC20_WBTC, "AUTOJOIN_ARC20_WBTC", false);
+  const anyArc20 = autojoinArc20Eth || autojoinArc20Sol || autojoinArc20Wbtc;
+  const anyAutojoin = autojoinCredits || autojoinUsdcx || anyArc20;
   const delegatedProvingUrl = env.DELEGATED_PROVING_URL?.trim().replace(/\/$/, "") || undefined;
   const delegatedProvingTokenFile = env.DELEGATED_PROVING_TOKEN_FILE?.trim() || undefined;
-  if ((autojoinCredits || autojoinUsdcx) && !privateKeyFile) {
+  if (anyAutojoin && !privateKeyFile) {
     throw new Error("autojoin requires ALEO_PRIVATE_KEY_FILE to sign authorizations");
   }
-  if ((autojoinCredits || autojoinUsdcx) && !delegatedProvingUrl) {
+  if (anyAutojoin && !delegatedProvingUrl) {
     throw new Error("autojoin requires DELEGATED_PROVING_URL");
   }
   if (delegatedProvingUrl) {
@@ -66,6 +71,9 @@ export function loadConfig(env = process.env) {
   return {
     autojoinCredits,
     autojoinUsdcx,
+    autojoinArc20Eth,
+    autojoinArc20Sol,
+    autojoinArc20Wbtc,
     delegatedProvingUrl,
     delegatedProvingTokenFile,
     autojoinPollIntervalMs: parsePositiveInteger(

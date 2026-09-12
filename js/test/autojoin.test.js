@@ -7,6 +7,7 @@ import {
   creditsJoinCall,
   JOIN_FAMILIES,
   consolidateRecords,
+  joinCall,
   recordsForFamily,
   submitDelegated,
   usdcxJoinCall,
@@ -52,6 +53,75 @@ test("uses network-specific USDCx program IDs", () => {
     recordsForFamily([testnetRecord], JOIN_FAMILIES.usdcx, "testnet"),
     [testnetRecord],
   );
+});
+
+test("maps network-specific ARC20 joins and rejects unsupported sizes", () => {
+  assert.deepEqual(joinCall(JOIN_FAMILIES.arc20Eth, 15), {
+    programName: "main_aj_arc20_2_15.aleo",
+    functionName: "join_15",
+  });
+  assert.throws(() => joinCall(JOIN_FAMILIES.arc20Eth, 16), /between 2 and 15/);
+  assert.deepEqual(joinCall(JOIN_FAMILIES.arc20Sol, 2, "testnet"), {
+    programName: "test_aj_arc20_2_15.aleo",
+    functionName: "join_2",
+  });
+  assert.equal(JOIN_FAMILIES.arc20Sol.recordPrograms.testnet, "test_arc20_sol.aleo");
+  assert.equal(JOIN_FAMILIES.arc20Sol.tokenIdentifiers.testnet, "test_arc20_sol");
+});
+
+test("joins 16 ARC20 records as join_15 then join_2 with dynamic dispatch inputs", async () => {
+  const calls = [];
+  let records = Array.from({ length: 16 }, (_, index) => ({
+    program_name: "arc20_eth.aleo",
+    record_name: "Token",
+    record_plaintext: `token-${index}`,
+    tag: `${index}field`,
+  }));
+  class ProgramManager {
+    networkClient = {
+      getProgram: async (program) => `program ${program};`,
+      getProgramImports: async () => ({ "arc20_multisig_core.aleo": "dependency" }),
+    };
+
+    async provingRequest(options) {
+      calls.push(options);
+      return {
+        toString: () => JSON.stringify({ authorization: { requests: [] } }),
+        free() {},
+      };
+    }
+  }
+  await consolidateRecords({
+    family: JOIN_FAMILIES.arc20Eth,
+    sdk: { ProgramManager },
+    privateKey: {},
+    networkUrl: "network",
+    proverUrl: "prover",
+    initialRecords: records,
+    pollIntervalMs: 1,
+    timeoutMs: 100,
+    submit: async () => {
+      const consumed = calls.at(-1).inputs.length - 1;
+      records = [...records.slice(consumed), {
+        program_name: "arc20_eth.aleo",
+        record_name: "Token",
+        record_plaintext: "joined",
+        tag: `joined-${calls.length}`,
+      }];
+    },
+    rescan: async () => records,
+  });
+  assert.deepEqual(calls.map(({ programName, functionName, inputs }) => [
+    programName,
+    functionName,
+    inputs.length,
+    inputs[0],
+  ]), [
+    ["main_aj_arc20_2_15.aleo", "join_15", 16, "'arc20_eth'"],
+    ["main_aj_arc20_2_15.aleo", "join_2", 3, "'arc20_eth'"],
+  ]);
+  assert.equal(calls[0].programImports["arc20_eth.aleo"], "program arc20_eth.aleo;");
+  assert.equal(calls[0].programImports["arc20_multisig_core.aleo"], "dependency");
 });
 
 test("joins 17 records as join_16 followed by join_2", async () => {

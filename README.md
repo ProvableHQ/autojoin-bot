@@ -24,3 +24,10 @@ USDCx consolidation is also supported for `usdcx_stablecoin.aleo/Token`
 (mainnet) and `test_usdcx_stablecoin.aleo/Token` (testnet), using the
 network-specific `aj_usdcx_stablecoin_*` / `test_aj_usdcx_stablecoin_*`
 program families.
+
+ARC20 consolidation is supported for `arc20_eth.aleo/Token`,
+`arc20_sol.aleo/Token`, and `arc20_wbtc.aleo/Token` on mainnet and the matching
+`test_*` token programs on testnet. It calls `main_aj_arc20_2_15.aleo/join_N`
+or `test_aj_arc20_2_15.aleo/join_N`, passing the network-specific token program
+identifier as the first public input and explicitly loading the dynamically
+dispatched token program and its imports before authorization.

@@ -8,6 +8,9 @@ use crate::network::{AleoNetwork, EDGE_SCANNER_ROOT};
 pub struct Config {
     pub autojoin_credits: bool,
     pub autojoin_usdcx: bool,
+    pub autojoin_arc20_eth: bool,
+    pub autojoin_arc20_sol: bool,
+    pub autojoin_arc20_wbtc: bool,
     pub autojoin_poll_interval_ms: u64,
     pub autojoin_timeout_ms: u64,
     pub delegated_proving_token_file: Option<PathBuf>,
@@ -49,12 +52,20 @@ impl Config {
 
         let autojoin_credits = parse_bool_env("AUTOJOIN_CREDITS", false)?;
         let autojoin_usdcx = parse_bool_env("AUTOJOIN_USDCX", false)?;
-        if (autojoin_credits || autojoin_usdcx) && !matches!(key_source, KeySource::PrivateKey(_)) {
+        let autojoin_arc20_eth = parse_bool_env("AUTOJOIN_ARC20_ETH", false)?;
+        let autojoin_arc20_sol = parse_bool_env("AUTOJOIN_ARC20_SOL", false)?;
+        let autojoin_arc20_wbtc = parse_bool_env("AUTOJOIN_ARC20_WBTC", false)?;
+        let any_arc20 = autojoin_arc20_eth || autojoin_arc20_sol || autojoin_arc20_wbtc;
+        let any_autojoin = autojoin_credits || autojoin_usdcx || any_arc20;
+        let network = env::var("ALEO_NETWORK")
+            .unwrap_or_else(|_| "testnet".into())
+            .parse()?;
+        if any_autojoin && !matches!(key_source, KeySource::PrivateKey(_)) {
             bail!("autojoin requires ALEO_PRIVATE_KEY_FILE to sign authorizations");
         }
         let delegated_proving_url =
             optional_env("DELEGATED_PROVING_URL").map(|url| url.trim_end_matches('/').to_string());
-        if (autojoin_credits || autojoin_usdcx) && delegated_proving_url.is_none() {
+        if any_autojoin && delegated_proving_url.is_none() {
             bail!("autojoin requires DELEGATED_PROVING_URL");
         }
         if let Some(url) = &delegated_proving_url {
@@ -64,15 +75,16 @@ impl Config {
         Ok(Self {
             autojoin_credits,
             autojoin_usdcx,
+            autojoin_arc20_eth,
+            autojoin_arc20_sol,
+            autojoin_arc20_wbtc,
             autojoin_poll_interval_ms: positive_u64_env("AUTOJOIN_POLL_INTERVAL_MS", 5_000)?,
             autojoin_timeout_ms: positive_u64_env("AUTOJOIN_TIMEOUT_MS", 300_000)?,
             delegated_proving_token_file: optional_env("DELEGATED_PROVING_TOKEN_FILE")
                 .map(PathBuf::from),
             delegated_proving_url,
             key_source,
-            network: env::var("ALEO_NETWORK")
-                .unwrap_or_else(|_| "testnet".into())
-                .parse()?,
+            network,
             decrypted_record_store_file,
             record_name: optional_env("RECORD_NAME"),
             record_program: optional_env("RECORD_PROGRAM"),

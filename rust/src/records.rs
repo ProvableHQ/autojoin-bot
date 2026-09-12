@@ -7,6 +7,9 @@ use crate::network::AleoNetwork;
 pub enum RecordFamily {
     Credits,
     Usdcx,
+    Arc20Eth,
+    Arc20Sol,
+    Arc20Wbtc,
 }
 
 impl RecordFamily {
@@ -14,21 +17,49 @@ impl RecordFamily {
         match self {
             Self::Credits => "credits",
             Self::Usdcx => "usdcx",
+            Self::Arc20Eth => "arc20-eth",
+            Self::Arc20Sol => "arc20-sol",
+            Self::Arc20Wbtc => "arc20-wbtc",
         }
     }
 
-    pub const fn record_program(self, network: AleoNetwork) -> &'static str {
+    pub const fn record_program(self, network: AleoNetwork) -> Option<&'static str> {
         match (self, network) {
-            (Self::Credits, _) => "credits.aleo",
-            (Self::Usdcx, AleoNetwork::Mainnet) => "usdcx_stablecoin.aleo",
-            (Self::Usdcx, AleoNetwork::Testnet) => "test_usdcx_stablecoin.aleo",
+            (Self::Credits, _) => Some("credits.aleo"),
+            (Self::Usdcx, AleoNetwork::Mainnet) => Some("usdcx_stablecoin.aleo"),
+            (Self::Usdcx, AleoNetwork::Testnet) => Some("test_usdcx_stablecoin.aleo"),
+            (Self::Arc20Eth, AleoNetwork::Mainnet) => Some("arc20_eth.aleo"),
+            (Self::Arc20Sol, AleoNetwork::Mainnet) => Some("arc20_sol.aleo"),
+            (Self::Arc20Wbtc, AleoNetwork::Mainnet) => Some("arc20_wbtc.aleo"),
+            (Self::Arc20Eth, AleoNetwork::Testnet) => Some("test_arc20_eth.aleo"),
+            (Self::Arc20Sol, AleoNetwork::Testnet) => Some("test_arc20_sol.aleo"),
+            (Self::Arc20Wbtc, AleoNetwork::Testnet) => Some("test_arc20_wbtc.aleo"),
         }
     }
 
     pub const fn record_name(self) -> &'static str {
         match self {
             Self::Credits => "credits",
-            Self::Usdcx => "Token",
+            Self::Usdcx | Self::Arc20Eth | Self::Arc20Sol | Self::Arc20Wbtc => "Token",
+        }
+    }
+
+    pub const fn token_identifier(self, network: AleoNetwork) -> Option<&'static str> {
+        match (self, network) {
+            (Self::Arc20Eth, AleoNetwork::Mainnet) => Some("arc20_eth"),
+            (Self::Arc20Sol, AleoNetwork::Mainnet) => Some("arc20_sol"),
+            (Self::Arc20Wbtc, AleoNetwork::Mainnet) => Some("arc20_wbtc"),
+            (Self::Arc20Eth, AleoNetwork::Testnet) => Some("test_arc20_eth"),
+            (Self::Arc20Sol, AleoNetwork::Testnet) => Some("test_arc20_sol"),
+            (Self::Arc20Wbtc, AleoNetwork::Testnet) => Some("test_arc20_wbtc"),
+            (Self::Credits | Self::Usdcx, _) => None,
+        }
+    }
+
+    pub const fn max_batch(self) -> usize {
+        match self {
+            Self::Arc20Eth | Self::Arc20Sol | Self::Arc20Wbtc => 15,
+            Self::Credits | Self::Usdcx => 16,
         }
     }
 }
@@ -69,7 +100,7 @@ pub fn records_for_family(
     let records: Vec<_> = records
         .iter()
         .filter(|record| {
-            record.program_name.as_deref() == Some(family.record_program(network))
+            record.program_name.as_deref() == family.record_program(network)
                 && record.record_name.as_deref() == Some(family.record_name())
         })
         .collect();
@@ -94,11 +125,32 @@ mod tests {
     fn usdcx_record_program_is_network_specific() {
         assert_eq!(
             RecordFamily::Usdcx.record_program(AleoNetwork::Mainnet),
-            "usdcx_stablecoin.aleo"
+            Some("usdcx_stablecoin.aleo")
         );
         assert_eq!(
             RecordFamily::Usdcx.record_program(AleoNetwork::Testnet),
-            "test_usdcx_stablecoin.aleo"
+            Some("test_usdcx_stablecoin.aleo")
         );
+    }
+
+    #[test]
+    fn arc20_metadata_is_network_specific() {
+        assert_eq!(
+            RecordFamily::Arc20Eth.record_program(AleoNetwork::Mainnet),
+            Some("arc20_eth.aleo")
+        );
+        assert_eq!(
+            RecordFamily::Arc20Eth.record_program(AleoNetwork::Testnet),
+            Some("test_arc20_eth.aleo")
+        );
+        assert_eq!(
+            RecordFamily::Arc20Eth.token_identifier(AleoNetwork::Mainnet),
+            Some("arc20_eth")
+        );
+        assert_eq!(
+            RecordFamily::Arc20Eth.token_identifier(AleoNetwork::Testnet),
+            Some("test_arc20_eth")
+        );
+        assert_eq!(RecordFamily::Arc20Eth.max_batch(), 15);
     }
 }

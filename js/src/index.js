@@ -20,11 +20,23 @@ async function main() {
   };
 
   let result;
-  let joinCount = 0;
-  let usdcxJoinCount = 0;
+  const joinCounts = {
+    credits: 0,
+    usdcx: 0,
+    arc20Eth: 0,
+    arc20Sol: 0,
+    arc20Wbtc: 0,
+  };
   try {
     result = await scan();
-    if (config.autojoinCredits || config.autojoinUsdcx) {
+    const enabledFamilies = [
+      [config.autojoinCredits, "credits"],
+      [config.autojoinUsdcx, "usdcx"],
+      [config.autojoinArc20Eth, "arc20Eth"],
+      [config.autojoinArc20Sol, "arc20Sol"],
+      [config.autojoinArc20Wbtc, "arc20Wbtc"],
+    ].filter(([enabled]) => enabled);
+    if (enabledFamilies.length > 0) {
       const proverToken = config.delegatedProvingTokenFile
         ? readSecureKeyFile(config.delegatedProvingTokenFile)
         : undefined;
@@ -47,11 +59,8 @@ async function main() {
           timeoutMs: config.autojoinTimeoutMs,
         });
       };
-      if (config.autojoinCredits) {
-        joinCount = (await runFamily(JOIN_FAMILIES.credits)).joins;
-      }
-      if (config.autojoinUsdcx) {
-        usdcxJoinCount = (await runFamily(JOIN_FAMILIES.usdcx)).joins;
+      for (const [, familyName] of enabledFamilies) {
+        joinCounts[familyName] = (await runFamily(JOIN_FAMILIES[familyName])).joins;
       }
       result = await scan();
     }
@@ -80,8 +89,11 @@ async function main() {
     network: config.network,
     uuid: result.uuid,
     recordCount: result.records.length,
-    creditsJoins: joinCount,
-    usdcxJoins: usdcxJoinCount,
+    creditsJoins: joinCounts.credits,
+    usdcxJoins: joinCounts.usdcx,
+    arc20EthJoins: joinCounts.arc20Eth,
+    arc20SolJoins: joinCounts.arc20Sol,
+    arc20WbtcJoins: joinCounts.arc20Wbtc,
     recordStore: config.recordStoreFile,
     decryptedRecordStore: config.decryptedRecordStoreFile,
   }, null, 2)}\n`);

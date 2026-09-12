@@ -6,9 +6,27 @@ const CREDITS_RECORD = "credits";
 const USDCX_PROGRAM = "usdcx_stablecoin.aleo";
 const USDCX_RECORD = "Token";
 
+function arc20Family(name, program) {
+  return Object.freeze({
+    name,
+    maxBatch: 15,
+    recordPrograms: Object.freeze({
+      mainnet: `${program}.aleo`,
+      testnet: `test_${program}.aleo`,
+    }),
+    recordName: "Token",
+    tokenIdentifiers: Object.freeze({ mainnet: program, testnet: `test_${program}` }),
+    programs: Object.freeze({
+      mainnet: Object.freeze(["main_aj_arc20_2_15.aleo"]),
+      testnet: Object.freeze(["test_aj_arc20_2_15.aleo"]),
+    }),
+  });
+}
+
 export const JOIN_FAMILIES = Object.freeze({
   credits: Object.freeze({
     name: "credits",
+    maxBatch: 16,
     recordPrograms: Object.freeze({ mainnet: CREDITS_PROGRAM, testnet: CREDITS_PROGRAM }),
     recordName: CREDITS_RECORD,
     programs: Object.freeze({
@@ -26,6 +44,7 @@ export const JOIN_FAMILIES = Object.freeze({
   }),
   usdcx: Object.freeze({
     name: "usdcx",
+    maxBatch: 16,
     recordPrograms: Object.freeze({
       mainnet: USDCX_PROGRAM,
       testnet: "test_usdcx_stablecoin.aleo",
@@ -44,22 +63,27 @@ export const JOIN_FAMILIES = Object.freeze({
       ]),
     }),
   }),
+  arc20Eth: arc20Family("arc20-eth", "arc20_eth"),
+  arc20Sol: arc20Family("arc20-sol", "arc20_sol"),
+  arc20Wbtc: arc20Family("arc20-wbtc", "arc20_wbtc"),
 });
 
 export function joinCall(family, recordCount, network = "mainnet") {
   if (!Object.values(JOIN_FAMILIES).includes(family)) {
     throw new Error("unknown autojoin record family");
   }
-  if (!Number.isInteger(recordCount) || recordCount < 2 || recordCount > 16) {
-    throw new Error(`${family.name} join size must be between 2 and 16`);
+  if (!Number.isInteger(recordCount) || recordCount < 2 || recordCount > family.maxBatch) {
+    throw new Error(`${family.name} join size must be between 2 and ${family.maxBatch}`);
   }
   const programs = family.programs[network];
-  if (!programs) throw new Error("network must be mainnet or testnet");
-  const programName = recordCount <= 10
+  if (!programs) throw new Error(`${family.name} autojoin is not configured for ${network}`);
+  const programName = programs.length === 1
     ? programs[0]
-    : recordCount <= 14
-      ? programs[1]
-      : programs[2];
+    : recordCount <= 10
+      ? programs[0]
+      : recordCount <= 14
+        ? programs[1]
+        : programs[2];
   return { programName, functionName: `join_${recordCount}` };
 }
 
@@ -72,7 +96,9 @@ export function usdcxJoinCall(recordCount, network = "mainnet") {
 }
 
 export function recordsForFamily(records, family, network = "mainnet") {
-  const selected = records.filter((record) => record.program_name === family.recordPrograms[network]
+  const recordProgram = family.recordPrograms[network];
+  if (!recordProgram) throw new Error(`${family.name} records are not configured for ${network}`);
+  const selected = records.filter((record) => record.program_name === recordProgram
     && record.record_name === family.recordName);
   for (const record of selected) {
     if (typeof record.record_plaintext !== "string" || typeof record.tag !== "string") {
@@ -171,16 +197,28 @@ export async function consolidateRecords({
   let joins = 0;
   const manager = new sdk.ProgramManager(networkUrl);
 
+  let dynamicProgramImports;
   while (recordsForFamily(records, family, network).length > 1) {
     const available = recordsForFamily(records, family, network);
-    const count = Math.min(available.length, 16);
+    const count = Math.min(available.length, family.maxBatch);
     const selected = available.slice(0, count);
     const selectedTags = new Set(selected.map((record) => record.tag));
     const existingTags = new Set(available.map((record) => record.tag));
     const call = joinCall(family, count, network);
+    const tokenIdentifier = family.tokenIdentifiers?.[network];
+    if (tokenIdentifier && !dynamicProgramImports) {
+      const dynamicProgram = family.recordPrograms[network];
+      const dynamicProgramSource = await manager.networkClient.getProgram(dynamicProgram);
+      dynamicProgramImports = await manager.networkClient.getProgramImports(dynamicProgramSource);
+      dynamicProgramImports[dynamicProgram] = dynamicProgramSource;
+    }
     const provingRequest = await manager.provingRequest({
       ...call,
-      inputs: selected.map((record) => record.record_plaintext),
+      inputs: [
+        ...(tokenIdentifier ? [`'${tokenIdentifier}'`] : []),
+        ...selected.map((record) => record.record_plaintext),
+      ],
+      ...(dynamicProgramImports ? { programImports: dynamicProgramImports } : {}),
       privateKey,
       priorityFee: 0,
       privateFee: false,

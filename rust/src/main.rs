@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use autojoin_bot::{
     AleoNetwork, Config, DelegatedProverClient, KeySource, RecordFamily, RecordStoreOptions,
     ScanResult, ScannerClient, read_secure_key_file, records_for_family, write_record_store,
@@ -10,6 +10,15 @@ use snarkvm_console::{
 };
 use std::{collections::HashSet, time::Duration};
 use tokio::time::{Instant, sleep};
+
+#[derive(Default)]
+struct JoinCounts {
+    credits: usize,
+    usdcx: usize,
+    arc20_eth: usize,
+    arc20_sol: usize,
+    arc20_wbtc: usize,
+}
 
 async fn scan<N: Network>(
     config: &Config,
@@ -34,7 +43,7 @@ async fn scan<N: Network>(
 
 async fn run<N: Network, A: Aleo<Network = N>>(
     config: &Config,
-) -> Result<(ScanResult, usize, usize)> {
+) -> Result<(ScanResult, JoinCounts)> {
     let encoded = match &config.key_source {
         KeySource::ViewKey(path) | KeySource::PrivateKey(path) => read_secure_key_file(path)?,
     };
@@ -57,10 +66,16 @@ async fn run<N: Network, A: Aleo<Network = N>>(
     };
     let scanner = ScannerClient::new(config.endpoint());
     let uuid = scanner.register(&view_key, config.start_block).await?;
-    let mut credits_joins = 0;
-    let mut usdcx_joins = 0;
+    let mut join_counts = JoinCounts::default();
 
-    if config.autojoin_credits || config.autojoin_usdcx {
+    let families = [
+        (RecordFamily::Credits, config.autojoin_credits),
+        (RecordFamily::Usdcx, config.autojoin_usdcx),
+        (RecordFamily::Arc20Eth, config.autojoin_arc20_eth),
+        (RecordFamily::Arc20Sol, config.autojoin_arc20_sol),
+        (RecordFamily::Arc20Wbtc, config.autojoin_arc20_wbtc),
+    ];
+    if families.iter().any(|(_, enabled)| *enabled) {
         let token = config
             .delegated_proving_token_file
             .as_deref()
@@ -74,11 +89,7 @@ async fn run<N: Network, A: Aleo<Network = N>>(
                 .expect("validated configuration"),
             token,
         );
-        for family in [RecordFamily::Credits, RecordFamily::Usdcx] {
-            let enabled = match family {
-                RecordFamily::Credits => config.autojoin_credits,
-                RecordFamily::Usdcx => config.autojoin_usdcx,
-            };
+        for (family, enabled) in families {
             if !enabled {
                 continue;
             }
@@ -93,17 +104,16 @@ async fn run<N: Network, A: Aleo<Network = N>>(
             )
             .await?;
             match family {
-                RecordFamily::Credits => credits_joins = joins,
-                RecordFamily::Usdcx => usdcx_joins = joins,
+                RecordFamily::Credits => join_counts.credits = joins,
+                RecordFamily::Usdcx => join_counts.usdcx = joins,
+                RecordFamily::Arc20Eth => join_counts.arc20_eth = joins,
+                RecordFamily::Arc20Sol => join_counts.arc20_sol = joins,
+                RecordFamily::Arc20Wbtc => join_counts.arc20_wbtc = joins,
             }
         }
     }
 
-    Ok((
-        scan(config, &scanner, &view_key, &uuid).await?,
-        credits_joins,
-        usdcx_joins,
-    ))
+    Ok((scan(config, &scanner, &view_key, &uuid).await?, join_counts))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -117,13 +127,16 @@ async fn consolidate_family<N: Network, A: Aleo<Network = N>>(
     family: RecordFamily,
 ) -> Result<usize> {
     let mut joins = 0;
+    let record_program = family
+        .record_program(config.network)
+        .context("record family is not configured for this network")?;
     loop {
         let records = scanner
             .fetch_unspent(
                 view_key,
                 uuid,
                 config.start_block,
-                Some(family.record_program(config.network)),
+                Some(record_program),
                 Some(family.record_name()),
             )
             .await?;
@@ -131,7 +144,7 @@ async fn consolidate_family<N: Network, A: Aleo<Network = N>>(
         if available.len() <= 1 {
             return Ok(joins);
         }
-        let count = available.len().min(16);
+        let count = available.len().min(family.max_batch());
         let selected = &available[..count];
         let selected_tags: HashSet<String> = selected
             .iter()
@@ -153,7 +166,7 @@ async fn consolidate_family<N: Network, A: Aleo<Network = N>>(
                     view_key,
                     uuid,
                     config.start_block,
-                    Some(family.record_program(config.network)),
+                    Some(record_program),
                     Some(family.record_name()),
                 )
                 .await?;
@@ -187,7 +200,7 @@ async fn consolidate_family<N: Network, A: Aleo<Network = N>>(
 #[tokio::main]
 async fn main() -> Result<()> {
     let config = Config::from_env()?;
-    let (result, credits_joins, usdcx_joins) = match config.network {
+    let (result, join_counts) = match config.network {
         AleoNetwork::Mainnet => run::<MainnetV0, AleoV0>(&config).await?,
         AleoNetwork::Testnet => run::<TestnetV0, AleoTestnetV0>(&config).await?,
     };
@@ -219,8 +232,11 @@ async fn main() -> Result<()> {
             "network": config.network.as_str(),
             "uuid": result.uuid,
             "record_count": result.records.len(),
-            "credits_joins": credits_joins,
-            "usdcx_joins": usdcx_joins,
+            "credits_joins": join_counts.credits,
+            "usdcx_joins": join_counts.usdcx,
+            "arc20_eth_joins": join_counts.arc20_eth,
+            "arc20_sol_joins": join_counts.arc20_sol,
+            "arc20_wbtc_joins": join_counts.arc20_wbtc,
             "record_store": config.record_store_file,
             "decrypted_record_store": config.decrypted_record_store_file,
         }))?
