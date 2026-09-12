@@ -62,3 +62,25 @@ test("accepts exactly one secure key-file source", () => {
     ALEO_PRIVATE_KEY_FILE: "/secure/private",
   }), /exactly one/);
 });
+
+test("autojoin requires a private key and delegated prover URL", () => {
+  const common = {
+    RECORD_STORE_FILE: "/secure/records.json",
+    AUTOJOIN_CREDITS: "true",
+  };
+  assert.throws(() => loadConfig({
+    ...common,
+    ALEO_VIEW_KEY_FILE: "/secure/view",
+    DELEGATED_PROVING_URL: "https://prover.example",
+  }), /requires ALEO_PRIVATE_KEY_FILE/);
+  assert.throws(() => loadConfig({
+    ...common,
+    ALEO_PRIVATE_KEY_FILE: "/secure/private",
+  }), /requires DELEGATED_PROVING_URL/);
+  const config = loadConfig({
+    ...common,
+    ALEO_PRIVATE_KEY_FILE: "/secure/private",
+    DELEGATED_PROVING_URL: "https://prover.example/",
+  });
+  assert.equal(config.delegatedProvingUrl, "https://prover.example");
+});

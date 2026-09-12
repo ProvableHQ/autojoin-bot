@@ -19,6 +19,15 @@ function parseBoolean(value, name, defaultValue) {
   throw new Error(`${name} must be true or false`);
 }
 
+function parsePositiveInteger(value, name, defaultValue) {
+  if (value === undefined || value.trim() === "") return defaultValue;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+  return parsed;
+}
+
 export function loadConfig(env = process.env) {
   const network = (env.ALEO_NETWORK ?? "testnet").trim().toLowerCase();
   if (network !== "mainnet" && network !== "testnet") {
@@ -36,8 +45,37 @@ export function loadConfig(env = process.env) {
   if (decryptedRecordStoreFile === recordStoreFile) {
     throw new Error("DECRYPTED_RECORD_STORE_FILE must differ from RECORD_STORE_FILE");
   }
+  const autojoinCredits = parseBoolean(env.AUTOJOIN_CREDITS, "AUTOJOIN_CREDITS", false);
+  const delegatedProvingUrl = env.DELEGATED_PROVING_URL?.trim().replace(/\/$/, "") || undefined;
+  const delegatedProvingTokenFile = env.DELEGATED_PROVING_TOKEN_FILE?.trim() || undefined;
+  if (autojoinCredits && !privateKeyFile) {
+    throw new Error("AUTOJOIN_CREDITS requires ALEO_PRIVATE_KEY_FILE to sign authorizations");
+  }
+  if (autojoinCredits && !delegatedProvingUrl) {
+    throw new Error("AUTOJOIN_CREDITS requires DELEGATED_PROVING_URL");
+  }
+  if (delegatedProvingUrl) {
+    const parsed = new URL(delegatedProvingUrl);
+    const local = parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1";
+    if (parsed.protocol !== "https:" && !(local && parsed.protocol === "http:")) {
+      throw new Error("DELEGATED_PROVING_URL must use HTTPS (HTTP is allowed only for localhost)");
+    }
+  }
 
   return {
+    autojoinCredits,
+    delegatedProvingUrl,
+    delegatedProvingTokenFile,
+    autojoinPollIntervalMs: parsePositiveInteger(
+      env.AUTOJOIN_POLL_INTERVAL_MS,
+      "AUTOJOIN_POLL_INTERVAL_MS",
+      5_000,
+    ),
+    autojoinTimeoutMs: parsePositiveInteger(
+      env.AUTOJOIN_TIMEOUT_MS,
+      "AUTOJOIN_TIMEOUT_MS",
+      300_000,
+    ),
     network,
     recordName: env.RECORD_NAME?.trim() || undefined,
     recordProgram: env.RECORD_PROGRAM?.trim() || undefined,

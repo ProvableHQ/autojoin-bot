@@ -30,6 +30,28 @@ Optional variables:
   protected parent. Set to `false` when ownership disclosure is acceptable.
 - `DECRYPTED_RECORD_STORE_FILE`: optional separate owner-only snapshot that
   includes decrypted records for later transaction construction.
+- `AUTOJOIN_CREDITS`: defaults to `false`. When `true`, repeatedly consolidates
+  all unspent `credits.aleo/credits` records and broadcasts through delegated
+  proving. A private key and `DELEGATED_PROVING_URL` are then required.
+- `DELEGATED_PROVING_TOKEN_FILE`: optional owner-only file containing the
+  prover bearer token. The token is never accepted directly from the command
+  line or environment.
+- `AUTOJOIN_POLL_INTERVAL_MS` and `AUTOJOIN_TIMEOUT_MS`: scanner polling
+  interval (5 seconds) and per-join timeout (5 minutes).
+
+For 2–10 inputs the client calls `autojoin_credits_2_10.aleo/join_N`; for
+11–14 it calls `autojoin_credits_11_14.aleo/join_N`; and for 15–16 it calls
+`autojoin_credits_15_16.aleo/join_N`. More than 16 records are reduced in
+successive batches of 16. After every accepted delegated broadcast the client
+waits until the scanner reports every input tag spent and a new replacement
+tag before authorizing the next join.
+
+The caller signs a full authorization locally, including nested
+`credits.aleo/join` requests. The authorization is wrapped in the delegated
+proving service's canonical JSON `ProvingRequest`, assigned a random 128-bit
+job ID, sealed to a one-time `/pubkey`, and sent to `POST /prove` with
+`broadcast: true`. The fee is omitted so the configured delegated prover fee
+master pays it.
 
 The SDK receives `https://edge.provable.com/api/scanner` as its base URL and
 appends `/mainnet` or `/testnet` from the selected SDK build. Edge is used as

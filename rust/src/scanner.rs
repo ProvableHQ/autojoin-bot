@@ -1,0 +1,216 @@
+use std::collections::HashMap;
+
+use anyhow::{Context, Result, anyhow};
+use base64::{Engine, engine::general_purpose::STANDARD};
+use crypto_box::{PublicKey, aead::OsRng};
+use reqwest::{Client, StatusCode};
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value, json};
+use snarkvm_console::{
+    account::ViewKey,
+    prelude::{Network, ToBytes},
+    program::{Ciphertext, Record},
+};
+
+use crate::{http::decode_response, records::OwnedRecord};
+
+const PAGE_SIZE: usize = 1000;
+const TAG_BATCH_SIZE: usize = 1000;
+
+#[derive(Clone)]
+pub struct ScannerClient {
+    client: Client,
+    endpoint: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct PubkeyResponse {
+    key_id: String,
+    public_key: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct RegistrationResponse {
+    uuid: String,
+}
+
+#[derive(Debug, Serialize)]
+struct EncryptedRegistrationRequest {
+    key_id: String,
+    ciphertext: String,
+}
+
+impl ScannerClient {
+    pub fn new(endpoint: String) -> Self {
+        Self {
+            client: Client::new(),
+            endpoint,
+        }
+    }
+
+    pub async fn register<N: Network>(&self, view_key: &ViewKey<N>, start: u32) -> Result<String> {
+        let pubkey = self
+            .client
+            .get(format!("{}/pubkey", self.endpoint))
+            .send()
+            .await
+            .context("failed to request scanner public key")?;
+        let pubkey: PubkeyResponse = decode_response(pubkey, "Scanner public-key request").await?;
+
+        let public_key: [u8; 32] = STANDARD
+            .decode(pubkey.public_key)
+            .context("scanner returned an invalid base64 public key")?
+            .try_into()
+            .map_err(|_| anyhow!("scanner public key must be 32 bytes"))?;
+
+        let mut plaintext = view_key.to_bytes_le()?;
+        plaintext.extend_from_slice(&start.to_le_bytes());
+        let ciphertext = PublicKey::from(public_key)
+            .seal(&mut OsRng, &plaintext)
+            .map_err(|error| anyhow!("failed to encrypt scanner registration: {error}"))?;
+
+        let response = self
+            .client
+            .post(format!("{}/register/encrypted", self.endpoint))
+            .json(&EncryptedRegistrationRequest {
+                key_id: pubkey.key_id,
+                ciphertext: STANDARD.encode(ciphertext),
+            })
+            .send()
+            .await
+            .context("failed to register with scanner")?;
+        let registration: RegistrationResponse =
+            decode_response(response, "Scanner registration").await?;
+        Ok(registration.uuid)
+    }
+
+    pub async fn fetch_unspent<N: Network>(
+        &self,
+        view_key: &ViewKey<N>,
+        uuid: &str,
+        start_block: u32,
+        program: Option<&str>,
+        record_name: Option<&str>,
+    ) -> Result<Vec<OwnedRecord>> {
+        let mut records = Vec::new();
+        let mut page = 0;
+
+        loop {
+            let body = owned_body(uuid, program, record_name, page);
+            let mut response = self
+                .client
+                .post(format!("{}/records/owned", self.endpoint))
+                .json(&body)
+                .send()
+                .await
+                .context("failed to fetch owned records")?;
+
+            // A process restart can forget the in-memory scanner key.
+            if response.status() == StatusCode::UNPROCESSABLE_ENTITY {
+                self.register(view_key, start_block).await?;
+                response = self
+                    .client
+                    .post(format!("{}/records/owned", self.endpoint))
+                    .json(&body)
+                    .send()
+                    .await
+                    .context("failed to retry owned-record fetch")?;
+            }
+
+            let mut page_records: Vec<OwnedRecord> =
+                decode_response(response, "Owned-record fetch").await?;
+            let complete = page_records.len() < PAGE_SIZE;
+            records.append(&mut page_records);
+            if complete {
+                break;
+            }
+            page += 1;
+        }
+
+        let mut records = self.remove_spent_tags(records).await?;
+        decrypt_records(view_key, &mut records);
+        Ok(records)
+    }
+
+    async fn remove_spent_tags(&self, records: Vec<OwnedRecord>) -> Result<Vec<OwnedRecord>> {
+        let mut tags: Vec<String> = records
+            .iter()
+            .filter_map(|record| record.tag.clone())
+            .collect();
+        tags.sort_unstable();
+        tags.dedup();
+
+        let mut spent = HashMap::new();
+        for batch in tags.chunks(TAG_BATCH_SIZE) {
+            let response = self
+                .client
+                .post(format!("{}/records/tags", self.endpoint))
+                .json(batch)
+                .send()
+                .await
+                .context("failed to check record tags")?;
+            let statuses: HashMap<String, bool> =
+                decode_response(response, "Record-tag check").await?;
+            spent.extend(statuses);
+        }
+
+        Ok(records
+            .into_iter()
+            .filter(|record| {
+                record
+                    .tag
+                    .as_ref()
+                    .is_none_or(|tag| spent.get(tag) != Some(&true))
+            })
+            .collect())
+    }
+}
+
+fn decrypt_records<N: Network>(view_key: &ViewKey<N>, records: &mut [OwnedRecord]) {
+    for record in records {
+        let Some(ciphertext) = record.record_ciphertext.as_deref() else {
+            continue;
+        };
+        let Ok(ciphertext) = ciphertext.parse::<Record<N, Ciphertext<N>>>() else {
+            continue;
+        };
+        if let Ok(plaintext) = ciphertext.decrypt(view_key) {
+            record.record_plaintext = Some(plaintext.to_string());
+        }
+    }
+}
+
+fn owned_body(uuid: &str, program: Option<&str>, record_name: Option<&str>, page: usize) -> Value {
+    let mut filter = Map::new();
+    filter.insert("results_per_page".into(), PAGE_SIZE.into());
+    filter.insert("page".into(), page.into());
+    if let Some(program) = program {
+        filter.insert("programs".into(), json!([program]));
+    }
+    if let Some(record_name) = record_name {
+        filter.insert("records".into(), json!([record_name]));
+    }
+    json!({ "uuid": uuid, "unspent": true, "filter": filter })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn owned_request_uses_wire_names_and_pagination() {
+        assert_eq!(
+            owned_body("1field", Some("credits.aleo"), Some("credits"), 2),
+            json!({
+                "uuid": "1field",
+                "unspent": true,
+                "filter": {
+                    "programs": ["credits.aleo"],
+                    "records": ["credits"],
+                    "results_per_page": 1000,
+                    "page": 2
+                }
+            })
+        );
+    }
+}

@@ -1,0 +1,108 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { cryptoBoxKeyPair, cryptoBoxSealOpen } from "@serenity-kit/noble-sodium";
+
+import { consolidateCredits, creditsJoinCall, submitDelegated } from "../src/autojoin.js";
+
+test("maps every supported input count to the deployed credits program", () => {
+  assert.deepEqual(creditsJoinCall(2), {
+    programName: "autojoin_credits_2_10.aleo",
+    functionName: "join_2",
+  });
+  assert.equal(creditsJoinCall(10).programName, "autojoin_credits_2_10.aleo");
+  assert.equal(creditsJoinCall(11).programName, "autojoin_credits_11_14.aleo");
+  assert.equal(creditsJoinCall(14).programName, "autojoin_credits_11_14.aleo");
+  assert.equal(creditsJoinCall(15).programName, "autojoin_credits_15_16.aleo");
+  assert.deepEqual(creditsJoinCall(16), {
+    programName: "autojoin_credits_15_16.aleo",
+    functionName: "join_16",
+  });
+  assert.throws(() => creditsJoinCall(1), /between 2 and 16/);
+  assert.throws(() => creditsJoinCall(17), /between 2 and 16/);
+});
+
+test("joins 17 records as join_16 followed by join_2", async () => {
+  const calls = [];
+  let records = Array.from({ length: 17 }, (_, index) => ({
+    program_name: "credits.aleo",
+    record_name: "credits",
+    record_plaintext: `{ owner: aleo1example.private, microcredits: ${index}u64.private, _nonce: 1group.public }`,
+    tag: `${index}field`,
+  }));
+  class ProgramManager {
+    async provingRequest(options) {
+      calls.push([options.programName, options.functionName, options.inputs.length]);
+      return {
+        toString: () => JSON.stringify({ authorization: { requests: [] }, broadcast: true }),
+        free() {},
+      };
+    }
+  }
+  await consolidateCredits({
+    sdk: { ProgramManager },
+    privateKey: {},
+    networkUrl: "network",
+    proverUrl: "prover",
+    initialRecords: records,
+    pollIntervalMs: 1,
+    timeoutMs: 100,
+    submit: async ({ request }) => {
+      assert.equal(request.payload.type, "authorization");
+      const count = calls.at(-1)[2];
+      records = [...records.slice(count), {
+        program_name: "credits.aleo",
+        record_name: "credits",
+        record_plaintext: "joined",
+        tag: `joined-${calls.length}`,
+      }];
+    },
+    rescan: async () => records,
+  });
+  assert.deepEqual(calls, [
+    ["autojoin_credits_15_16.aleo", "join_16", 16],
+    ["autojoin_credits_2_10.aleo", "join_2", 2],
+  ]);
+});
+
+test("seals canonical JSON for /prove and preserves affinity cookie", async () => {
+  const keys = cryptoBoxKeyPair();
+  const provingRequest = {
+    broadcast: true,
+    job_id: "00112233445566778899aabbccddeeff",
+    payload: { type: "authorization", authorization: { requests: [] } },
+  };
+  const calls = [];
+  const fetchImpl = async (url, options = {}) => {
+    calls.push([url, options]);
+    if (url.endsWith("/pubkey")) {
+      return new Response(JSON.stringify({
+        key_id: "key-1",
+        public_key: Buffer.from(keys.publicKey).toString("base64"),
+      }), {
+        status: 200,
+        headers: { "set-cookie": "affinity=worker-1; Path=/; Secure" },
+      });
+    }
+    const envelope = JSON.parse(options.body);
+    const plaintext = cryptoBoxSealOpen({
+      ciphertext: Uint8Array.from(Buffer.from(envelope.ciphertext, "base64")),
+      privateKey: keys.privateKey,
+      publicKey: keys.publicKey,
+    });
+    assert.deepEqual(JSON.parse(new TextDecoder().decode(plaintext)), provingRequest);
+    assert.equal(options.headers.Cookie, "affinity=worker-1");
+    return new Response(JSON.stringify({
+      transaction: { id: "at1example" },
+      broadcast_result: { Accepted: { status_code: 200 } },
+    }), { status: 200 });
+  };
+
+  await submitDelegated({
+    url: "https://prover.example",
+    token: "secret-token",
+    request: provingRequest,
+    fetchImpl,
+  });
+  assert.equal(calls[0][1].headers.Authorization, "Bearer secret-token");
+  assert.equal(calls[1][0], "https://prover.example/prove");
+});

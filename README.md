@@ -12,3 +12,10 @@ owned records with `unspent: true`, and verify their tags against
 stored in an atomic local snapshot without decrypted plaintext. Owner-only
 ciphertext storage is the default but can be relaxed; an optional separate
 decrypted-record snapshot is always owner-only.
+
+Both implementations can optionally consolidate ALEO credits records using
+the deployed `autojoin_credits_2_10.aleo`, `autojoin_credits_11_14.aleo`, and
+`autojoin_credits_15_16.aleo` programs. They authorize locally, delegate all
+proof generation and fee payment, broadcast through the proving service, and
+rescan between batches so a set larger than 16 is reduced safely and
+iteratively.
