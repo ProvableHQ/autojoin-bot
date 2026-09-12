@@ -83,4 +83,13 @@ test("autojoin requires a private key and delegated prover URL", () => {
     DELEGATED_PROVING_URL: "https://prover.example/",
   });
   assert.equal(config.delegatedProvingUrl, "https://prover.example");
+
+  const usdcx = loadConfig({
+    ...common,
+    AUTOJOIN_CREDITS: "false",
+    AUTOJOIN_USDCX: "true",
+    ALEO_PRIVATE_KEY_FILE: "/secure/private",
+    DELEGATED_PROVING_URL: "https://prover.example",
+  });
+  assert.equal(usdcx.autojoinUsdcx, true);
 });

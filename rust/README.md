@@ -40,6 +40,8 @@ Optional variables:
 - `AUTOJOIN_CREDITS`: defaults to `false`. When `true`, repeatedly consolidates
   all unspent `credits.aleo/credits` records and broadcasts through delegated
   proving. A private key and `DELEGATED_PROVING_URL` are then required.
+- `AUTOJOIN_USDCX`: defaults to `false`. When `true`, applies the same
+  iterative delegated-proving flow to USDCx `Token` records.
 - `DELEGATED_PROVING_TOKEN_FILE`: optional owner-only file containing the
   prover bearer token. The token is never accepted directly from the command
   line or environment.
@@ -60,6 +62,13 @@ job ID, sealed to a one-time `/pubkey`, and sent to `POST /prove` with
 `broadcast: true`. The fee is omitted so the configured delegated prover fee
 master pays it. snarkVM is used only for local authorization; proof generation
 remains delegated.
+
+USDCx uses `usdcx_stablecoin.aleo/Token` on mainnet and
+`test_usdcx_stablecoin.aleo/Token` on testnet. Mainnet joins use
+`aj_usdcx_stablecoin_{2_10,11_14,15_16}.aleo`; testnet joins use the matching
+`test_aj_usdcx_stablecoin_*` program ID. Each calls `join_N` for the selected
+batch size. The Rust authorization loader recursively fetches and registers
+the stablecoin program's import graph before signing the nested calls.
 
 The selected endpoint is
 `https://edge.provable.com/api/scanner/{mainnet|testnet}`. Edge is used as an

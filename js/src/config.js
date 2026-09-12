@@ -46,13 +46,14 @@ export function loadConfig(env = process.env) {
     throw new Error("DECRYPTED_RECORD_STORE_FILE must differ from RECORD_STORE_FILE");
   }
   const autojoinCredits = parseBoolean(env.AUTOJOIN_CREDITS, "AUTOJOIN_CREDITS", false);
+  const autojoinUsdcx = parseBoolean(env.AUTOJOIN_USDCX, "AUTOJOIN_USDCX", false);
   const delegatedProvingUrl = env.DELEGATED_PROVING_URL?.trim().replace(/\/$/, "") || undefined;
   const delegatedProvingTokenFile = env.DELEGATED_PROVING_TOKEN_FILE?.trim() || undefined;
-  if (autojoinCredits && !privateKeyFile) {
-    throw new Error("AUTOJOIN_CREDITS requires ALEO_PRIVATE_KEY_FILE to sign authorizations");
+  if ((autojoinCredits || autojoinUsdcx) && !privateKeyFile) {
+    throw new Error("autojoin requires ALEO_PRIVATE_KEY_FILE to sign authorizations");
   }
-  if (autojoinCredits && !delegatedProvingUrl) {
-    throw new Error("AUTOJOIN_CREDITS requires DELEGATED_PROVING_URL");
+  if ((autojoinCredits || autojoinUsdcx) && !delegatedProvingUrl) {
+    throw new Error("autojoin requires DELEGATED_PROVING_URL");
   }
   if (delegatedProvingUrl) {
     const parsed = new URL(delegatedProvingUrl);
@@ -64,6 +65,7 @@ export function loadConfig(env = process.env) {
 
   return {
     autojoinCredits,
+    autojoinUsdcx,
     delegatedProvingUrl,
     delegatedProvingTokenFile,
     autojoinPollIntervalMs: parsePositiveInteger(

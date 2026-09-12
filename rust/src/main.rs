@@ -1,7 +1,7 @@
 use anyhow::Result;
 use autojoin_bot::{
-    AleoNetwork, Config, DelegatedProverClient, KeySource, RecordStoreOptions, ScanResult,
-    ScannerClient, credits_records, read_secure_key_file, write_record_store,
+    AleoNetwork, Config, DelegatedProverClient, KeySource, RecordFamily, RecordStoreOptions,
+    ScanResult, ScannerClient, read_secure_key_file, records_for_family, write_record_store,
 };
 use snarkvm_circuit_network::{Aleo, AleoTestnetV0, AleoV0};
 use snarkvm_console::{
@@ -32,7 +32,9 @@ async fn scan<N: Network>(
     })
 }
 
-async fn run<N: Network, A: Aleo<Network = N>>(config: &Config) -> Result<(ScanResult, usize)> {
+async fn run<N: Network, A: Aleo<Network = N>>(
+    config: &Config,
+) -> Result<(ScanResult, usize, usize)> {
     let encoded = match &config.key_source {
         KeySource::ViewKey(path) | KeySource::PrivateKey(path) => read_secure_key_file(path)?,
     };
@@ -55,9 +57,10 @@ async fn run<N: Network, A: Aleo<Network = N>>(config: &Config) -> Result<(ScanR
     };
     let scanner = ScannerClient::new(config.endpoint());
     let uuid = scanner.register(&view_key, config.start_block).await?;
-    let mut joins = 0;
+    let mut credits_joins = 0;
+    let mut usdcx_joins = 0;
 
-    if config.autojoin_credits {
+    if config.autojoin_credits || config.autojoin_usdcx {
         let token = config
             .delegated_proving_token_file
             .as_deref()
@@ -71,83 +74,120 @@ async fn run<N: Network, A: Aleo<Network = N>>(config: &Config) -> Result<(ScanR
                 .expect("validated configuration"),
             token,
         );
-        loop {
-            let records = scanner
-                .fetch_unspent(
-                    &view_key,
-                    &uuid,
-                    config.start_block,
-                    Some("credits.aleo"),
-                    Some("credits"),
-                )
-                .await?;
-            let available = credits_records(&records)?;
-            if available.len() <= 1 {
-                break;
+        for family in [RecordFamily::Credits, RecordFamily::Usdcx] {
+            let enabled = match family {
+                RecordFamily::Credits => config.autojoin_credits,
+                RecordFamily::Usdcx => config.autojoin_usdcx,
+            };
+            if !enabled {
+                continue;
             }
-            let count = available.len().min(16);
-            let selected = &available[..count];
-            let selected_tags: HashSet<String> = selected
-                .iter()
-                .filter_map(|record| record.tag.clone())
-                .collect();
-            let existing_tags: HashSet<String> = available
-                .iter()
-                .filter_map(|record| record.tag.clone())
-                .collect();
-            prover
-                .prove_and_broadcast::<N, A>(
-                    private_key.as_ref().expect("autojoin requires private key"),
-                    config.network,
-                    selected,
-                )
-                .await?;
-            joins += 1;
-
-            let deadline = Instant::now() + Duration::from_millis(config.autojoin_timeout_ms);
-            loop {
-                let current = scanner
-                    .fetch_unspent(
-                        &view_key,
-                        &uuid,
-                        config.start_block,
-                        Some("credits.aleo"),
-                        Some("credits"),
-                    )
-                    .await?;
-                let current_credits = credits_records(&current)?;
-                let inputs_gone = current_credits.iter().all(|record| {
-                    record
-                        .tag
-                        .as_ref()
-                        .is_none_or(|tag| !selected_tags.contains(tag))
-                });
-                let replacement_seen = current_credits.iter().any(|record| {
-                    record
-                        .tag
-                        .as_ref()
-                        .is_some_and(|tag| !existing_tags.contains(tag))
-                });
-                if inputs_gone && replacement_seen {
-                    break;
-                }
-                if Instant::now() >= deadline {
-                    anyhow::bail!(
-                        "timed out waiting for autojoin transaction to reach the scanner"
-                    );
-                }
-                sleep(Duration::from_millis(config.autojoin_poll_interval_ms)).await;
+            let joins = consolidate_family::<N, A>(
+                config,
+                &scanner,
+                &prover,
+                private_key.as_ref().expect("autojoin requires private key"),
+                &view_key,
+                &uuid,
+                family,
+            )
+            .await?;
+            match family {
+                RecordFamily::Credits => credits_joins = joins,
+                RecordFamily::Usdcx => usdcx_joins = joins,
             }
         }
     }
 
-    Ok((scan(config, &scanner, &view_key, &uuid).await?, joins))
+    Ok((
+        scan(config, &scanner, &view_key, &uuid).await?,
+        credits_joins,
+        usdcx_joins,
+    ))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn consolidate_family<N: Network, A: Aleo<Network = N>>(
+    config: &Config,
+    scanner: &ScannerClient,
+    prover: &DelegatedProverClient,
+    private_key: &PrivateKey<N>,
+    view_key: &ViewKey<N>,
+    uuid: &str,
+    family: RecordFamily,
+) -> Result<usize> {
+    let mut joins = 0;
+    loop {
+        let records = scanner
+            .fetch_unspent(
+                view_key,
+                uuid,
+                config.start_block,
+                Some(family.record_program(config.network)),
+                Some(family.record_name()),
+            )
+            .await?;
+        let available = records_for_family(&records, family, config.network)?;
+        if available.len() <= 1 {
+            return Ok(joins);
+        }
+        let count = available.len().min(16);
+        let selected = &available[..count];
+        let selected_tags: HashSet<String> = selected
+            .iter()
+            .filter_map(|record| record.tag.clone())
+            .collect();
+        let existing_tags: HashSet<String> = available
+            .iter()
+            .filter_map(|record| record.tag.clone())
+            .collect();
+        prover
+            .prove_and_broadcast::<N, A>(private_key, config.network, family, selected)
+            .await?;
+        joins += 1;
+
+        let deadline = Instant::now() + Duration::from_millis(config.autojoin_timeout_ms);
+        loop {
+            let current = scanner
+                .fetch_unspent(
+                    view_key,
+                    uuid,
+                    config.start_block,
+                    Some(family.record_program(config.network)),
+                    Some(family.record_name()),
+                )
+                .await?;
+            let current_records = records_for_family(&current, family, config.network)?;
+            let inputs_gone = current_records.iter().all(|record| {
+                record
+                    .tag
+                    .as_ref()
+                    .is_none_or(|tag| !selected_tags.contains(tag))
+            });
+            let replacement_seen = current_records.iter().any(|record| {
+                record
+                    .tag
+                    .as_ref()
+                    .is_some_and(|tag| !existing_tags.contains(tag))
+            });
+            if inputs_gone && replacement_seen {
+                break;
+            }
+            if Instant::now() >= deadline {
+                anyhow::bail!(
+                    "timed out waiting for {} autojoin transaction to reach the scanner",
+                    family.name()
+                );
+            }
+            sleep(Duration::from_millis(config.autojoin_poll_interval_ms)).await;
+        }
+    }
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let config = Config::from_env()?;
-    let (result, joins) = match config.network {
+    let (result, credits_joins, usdcx_joins) = match config.network {
         AleoNetwork::Mainnet => run::<MainnetV0, AleoV0>(&config).await?,
         AleoNetwork::Testnet => run::<TestnetV0, AleoTestnetV0>(&config).await?,
     };
@@ -179,7 +219,8 @@ async fn main() -> Result<()> {
             "network": config.network.as_str(),
             "uuid": result.uuid,
             "record_count": result.records.len(),
-            "credits_joins": joins,
+            "credits_joins": credits_joins,
+            "usdcx_joins": usdcx_joins,
             "record_store": config.record_store_file,
             "decrypted_record_store": config.decrypted_record_store_file,
         }))?

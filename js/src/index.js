@@ -1,7 +1,7 @@
 import { loadConfig, loadSdk, readSecureKeyFile } from "./config.js";
 import { registerAndFetchUnspentRecords } from "./scanner.js";
 import { writeRecordStore } from "./store.js";
-import { consolidateCredits } from "./autojoin.js";
+import { JOIN_FAMILIES, consolidateRecords } from "./autojoin.js";
 
 const NETWORK_API_URL = "https://api.provable.com/v2";
 
@@ -21,29 +21,38 @@ async function main() {
 
   let result;
   let joinCount = 0;
+  let usdcxJoinCount = 0;
   try {
     result = await scan();
-    if (config.autojoinCredits) {
-      const creditsScan = async () => (await scan({
-        recordProgram: "credits.aleo",
-        recordName: "credits",
-      })).records;
-      const creditRecords = await creditsScan();
+    if (config.autojoinCredits || config.autojoinUsdcx) {
       const proverToken = config.delegatedProvingTokenFile
         ? readSecureKeyFile(config.delegatedProvingTokenFile)
         : undefined;
-      const consolidation = await consolidateCredits({
-        sdk,
-        privateKey,
-        networkUrl: NETWORK_API_URL,
-        proverUrl: config.delegatedProvingUrl,
-        proverToken,
-        initialRecords: creditRecords,
-        rescan: creditsScan,
-        pollIntervalMs: config.autojoinPollIntervalMs,
-        timeoutMs: config.autojoinTimeoutMs,
-      });
-      joinCount = consolidation.joins;
+      const runFamily = async (family) => {
+        const familyScan = async () => (await scan({
+          recordProgram: family.recordPrograms[config.network],
+          recordName: family.recordName,
+        })).records;
+        return consolidateRecords({
+          family,
+          network: config.network,
+          sdk,
+          privateKey,
+          networkUrl: NETWORK_API_URL,
+          proverUrl: config.delegatedProvingUrl,
+          proverToken,
+          initialRecords: await familyScan(),
+          rescan: familyScan,
+          pollIntervalMs: config.autojoinPollIntervalMs,
+          timeoutMs: config.autojoinTimeoutMs,
+        });
+      };
+      if (config.autojoinCredits) {
+        joinCount = (await runFamily(JOIN_FAMILIES.credits)).joins;
+      }
+      if (config.autojoinUsdcx) {
+        usdcxJoinCount = (await runFamily(JOIN_FAMILIES.usdcx)).joins;
+      }
       result = await scan();
     }
   } finally {
@@ -72,6 +81,7 @@ async function main() {
     uuid: result.uuid,
     recordCount: result.records.length,
     creditsJoins: joinCount,
+    usdcxJoins: usdcxJoinCount,
     recordStore: config.recordStoreFile,
     decryptedRecordStore: config.decryptedRecordStoreFile,
   }, null, 2)}\n`);

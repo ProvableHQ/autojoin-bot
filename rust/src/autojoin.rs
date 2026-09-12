@@ -1,4 +1,4 @@
-use std::str::FromStr;
+use std::{collections::HashMap, str::FromStr};
 
 use anyhow::{Context, Result, anyhow, bail};
 use base64::{Engine, engine::general_purpose::STANDARD};
@@ -15,7 +15,11 @@ use snarkvm_console::{
 use snarkvm_synthesizer::{Process, Program};
 use zeroize::Zeroizing;
 
-use crate::{http::decode_response, network::AleoNetwork, records::OwnedRecord};
+use crate::{
+    http::decode_response,
+    network::AleoNetwork,
+    records::{OwnedRecord, RecordFamily},
+};
 
 #[derive(Clone)]
 pub struct DelegatedProverClient {
@@ -43,17 +47,13 @@ impl DelegatedProverClient {
         &self,
         private_key: &PrivateKey<N>,
         network: AleoNetwork,
+        family: RecordFamily,
         records: &[&OwnedRecord],
     ) -> Result<Value> {
-        let (program_id, function_name) = credits_join_call(records.len())
-            .context("credits join size must be between 2 and 16")?;
-        let source_url = format!(
-            "https://api.explorer.provable.com/v2/{}/program/{program_id}",
-            network.as_str()
-        );
-        let source_response = self.client.get(source_url).send().await?;
-        let source: String = decode_response(source_response, "Autojoin-program fetch").await?;
-        let authorization = authorize::<N, A>(private_key, records, &source, function_name)?;
+        let (program_id, function_name) = join_call(family, network, records.len())
+            .with_context(|| format!("{} join size must be between 2 and 16", family.name()))?;
+        let programs = self.fetch_program_graph::<N>(network, program_id).await?;
+        let authorization = authorize::<N, A>(private_key, records, &programs, function_name)?;
         let request = json!({
             "broadcast": true,
             "job_id": format!("{:032x}", rand::random::<u128>()),
@@ -63,6 +63,33 @@ impl DelegatedProverClient {
             }
         });
         self.submit(request).await
+    }
+
+    async fn fetch_program_graph<N: Network>(
+        &self,
+        network: AleoNetwork,
+        root_program: &str,
+    ) -> Result<Vec<Program<N>>> {
+        let mut pending = vec![root_program.to_owned()];
+        let mut programs = HashMap::new();
+
+        while let Some(program_id) = pending.pop() {
+            if program_id == "credits.aleo" || programs.contains_key(&program_id) {
+                continue;
+            }
+            let source_url = format!(
+                "https://api.explorer.provable.com/v2/{}/program/{program_id}",
+                network.as_str()
+            );
+            let response = self.client.get(source_url).send().await?;
+            let source: String = decode_response(response, "Autojoin-program fetch").await?;
+            let program = Program::<N>::from_str(&source)
+                .with_context(|| format!("invalid deployed program source for {program_id}"))?;
+            pending.extend(program.imports().keys().map(ToString::to_string));
+            programs.insert(program_id, program);
+        }
+
+        topological_programs(programs, root_program)
     }
 
     async fn submit(&self, request: Value) -> Result<Value> {
@@ -116,15 +143,17 @@ impl DelegatedProverClient {
 fn authorize<N: Network, A: Aleo<Network = N>>(
     private_key: &PrivateKey<N>,
     records: &[&OwnedRecord],
-    source: &str,
+    programs: &[Program<N>],
     function_name: &str,
 ) -> Result<snarkvm_synthesizer::Authorization<N>> {
-    let program = Program::<N>::from_str(source).context("invalid deployed autojoin program")?;
+    let program = programs.last().context("autojoin program graph is empty")?;
     let process = Process::<N>::load().context("failed to initialize authorization process")?;
-    process
-        .lock()
-        .add_program(&program)
-        .with_context(|| format!("failed to load {}", program.id()))?;
+    for dependency in programs {
+        process
+            .lock()
+            .add_program(dependency)
+            .with_context(|| format!("failed to load {}", dependency.id()))?;
+    }
     let inputs = records
         .iter()
         .map(|record| {
@@ -148,6 +177,43 @@ fn authorize<N: Network, A: Aleo<Network = N>>(
         .context("failed to authorize autojoin call")
 }
 
+fn topological_programs<N: Network>(
+    mut programs: HashMap<String, Program<N>>,
+    root_program: &str,
+) -> Result<Vec<Program<N>>> {
+    let mut ordered = Vec::with_capacity(programs.len());
+    let mut loaded = std::collections::HashSet::from(["credits.aleo".to_owned()]);
+
+    while !programs.is_empty() {
+        let ready = programs.iter().find_map(|(id, program)| {
+            program
+                .imports()
+                .keys()
+                .all(|dependency| loaded.contains(&dependency.to_string()))
+                .then(|| id.clone())
+        });
+        let id = ready.context("autojoin program imports contain a cycle or missing dependency")?;
+        let program = programs.remove(&id).expect("selected from map");
+        loaded.insert(id);
+        ordered.push(program);
+    }
+
+    if ordered
+        .last()
+        .map(|program| program.id().to_string())
+        .as_deref()
+        != Some(root_program)
+    {
+        let position = ordered
+            .iter()
+            .position(|program| program.id().to_string() == root_program)
+            .context("autojoin root program is missing")?;
+        let root = ordered.remove(position);
+        ordered.push(root);
+    }
+    Ok(ordered)
+}
+
 fn broadcast_accepted(result: &Value) -> bool {
     result.get("broadcast_result").is_some_and(|broadcast| {
         broadcast.get("Accepted").is_some()
@@ -159,10 +225,28 @@ fn broadcast_accepted(result: &Value) -> bool {
 }
 
 pub const fn credits_join_call(count: usize) -> Option<(&'static str, &'static str)> {
-    let program = match count {
-        2..=10 => "autojoin_credits_2_10.aleo",
-        11..=14 => "autojoin_credits_11_14.aleo",
-        15..=16 => "autojoin_credits_15_16.aleo",
+    join_call(RecordFamily::Credits, AleoNetwork::Mainnet, count)
+}
+
+pub const fn join_call(
+    family: RecordFamily,
+    network: AleoNetwork,
+    count: usize,
+) -> Option<(&'static str, &'static str)> {
+    let program = match (family, network, count) {
+        (RecordFamily::Credits, _, 2..=10) => "autojoin_credits_2_10.aleo",
+        (RecordFamily::Credits, _, 11..=14) => "autojoin_credits_11_14.aleo",
+        (RecordFamily::Credits, _, 15..=16) => "autojoin_credits_15_16.aleo",
+        (RecordFamily::Usdcx, AleoNetwork::Mainnet, 2..=10) => "aj_usdcx_stablecoin_2_10.aleo",
+        (RecordFamily::Usdcx, AleoNetwork::Mainnet, 11..=14) => "aj_usdcx_stablecoin_11_14.aleo",
+        (RecordFamily::Usdcx, AleoNetwork::Mainnet, 15..=16) => "aj_usdcx_stablecoin_15_16.aleo",
+        (RecordFamily::Usdcx, AleoNetwork::Testnet, 2..=10) => "test_aj_usdcx_stablecoin_2_10.aleo",
+        (RecordFamily::Usdcx, AleoNetwork::Testnet, 11..=14) => {
+            "test_aj_usdcx_stablecoin_11_14.aleo"
+        }
+        (RecordFamily::Usdcx, AleoNetwork::Testnet, 15..=16) => {
+            "test_aj_usdcx_stablecoin_15_16.aleo"
+        }
         _ => return None,
     };
     let function = match count {
@@ -189,6 +273,7 @@ pub const fn credits_join_call(count: usize) -> Option<(&'static str, &'static s
 #[cfg(test)]
 mod tests {
     use super::*;
+    use snarkvm_console::prelude::TestnetV0;
 
     #[test]
     fn join_program_bands_are_exact() {
@@ -218,5 +303,38 @@ mod tests {
         );
         assert_eq!(credits_join_call(1), None);
         assert_eq!(credits_join_call(17), None);
+        assert_eq!(
+            join_call(RecordFamily::Usdcx, AleoNetwork::Mainnet, 2),
+            Some(("aj_usdcx_stablecoin_2_10.aleo", "join_2"))
+        );
+        assert_eq!(
+            join_call(RecordFamily::Usdcx, AleoNetwork::Testnet, 11)
+                .unwrap()
+                .0,
+            "test_aj_usdcx_stablecoin_11_14.aleo"
+        );
+        assert_eq!(
+            join_call(RecordFamily::Usdcx, AleoNetwork::Testnet, 16),
+            Some(("test_aj_usdcx_stablecoin_15_16.aleo", "join_16"))
+        );
+    }
+
+    #[test]
+    fn import_graph_is_ordered_before_root() {
+        let dependency = Program::<TestnetV0>::from_str(
+            "program dependency.aleo;\n\nfunction noop:\n    input r0 as u8.public;\n    output r0 as u8.public;\n",
+        )
+        .unwrap();
+        let root = Program::<TestnetV0>::from_str(
+            "import dependency.aleo;\n\nprogram root.aleo;\n\nfunction noop:\n    input r0 as u8.public;\n    output r0 as u8.public;\n",
+        )
+        .unwrap();
+        let programs = HashMap::from([
+            ("root.aleo".to_owned(), root),
+            ("dependency.aleo".to_owned(), dependency),
+        ]);
+        let ordered = topological_programs(programs, "root.aleo").unwrap();
+        assert_eq!(ordered[0].id().to_string(), "dependency.aleo");
+        assert_eq!(ordered[1].id().to_string(), "root.aleo");
     }
 }

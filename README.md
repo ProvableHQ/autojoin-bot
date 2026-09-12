@@ -19,3 +19,8 @@ the deployed `autojoin_credits_2_10.aleo`, `autojoin_credits_11_14.aleo`, and
 proof generation and fee payment, broadcast through the proving service, and
 rescan between batches so a set larger than 16 is reduced safely and
 iteratively.
+
+USDCx consolidation is also supported for `usdcx_stablecoin.aleo/Token`
+(mainnet) and `test_usdcx_stablecoin.aleo/Token` (testnet), using the
+network-specific `aj_usdcx_stablecoin_*` / `test_aj_usdcx_stablecoin_*`
+program families.

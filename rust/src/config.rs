@@ -7,6 +7,7 @@ use crate::network::{AleoNetwork, EDGE_SCANNER_ROOT};
 #[derive(Debug)]
 pub struct Config {
     pub autojoin_credits: bool,
+    pub autojoin_usdcx: bool,
     pub autojoin_poll_interval_ms: u64,
     pub autojoin_timeout_ms: u64,
     pub delegated_proving_token_file: Option<PathBuf>,
@@ -47,13 +48,14 @@ impl Config {
         }
 
         let autojoin_credits = parse_bool_env("AUTOJOIN_CREDITS", false)?;
-        if autojoin_credits && !matches!(key_source, KeySource::PrivateKey(_)) {
-            bail!("AUTOJOIN_CREDITS requires ALEO_PRIVATE_KEY_FILE to sign authorizations");
+        let autojoin_usdcx = parse_bool_env("AUTOJOIN_USDCX", false)?;
+        if (autojoin_credits || autojoin_usdcx) && !matches!(key_source, KeySource::PrivateKey(_)) {
+            bail!("autojoin requires ALEO_PRIVATE_KEY_FILE to sign authorizations");
         }
         let delegated_proving_url =
             optional_env("DELEGATED_PROVING_URL").map(|url| url.trim_end_matches('/').to_string());
-        if autojoin_credits && delegated_proving_url.is_none() {
-            bail!("AUTOJOIN_CREDITS requires DELEGATED_PROVING_URL");
+        if (autojoin_credits || autojoin_usdcx) && delegated_proving_url.is_none() {
+            bail!("autojoin requires DELEGATED_PROVING_URL");
         }
         if let Some(url) = &delegated_proving_url {
             validate_prover_url(url)?;
@@ -61,6 +63,7 @@ impl Config {
 
         Ok(Self {
             autojoin_credits,
+            autojoin_usdcx,
             autojoin_poll_interval_ms: positive_u64_env("AUTOJOIN_POLL_INTERVAL_MS", 5_000)?,
             autojoin_timeout_ms: positive_u64_env("AUTOJOIN_TIMEOUT_MS", 300_000)?,
             delegated_proving_token_file: optional_env("DELEGATED_PROVING_TOKEN_FILE")
