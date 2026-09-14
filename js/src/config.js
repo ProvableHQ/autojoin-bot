@@ -1,5 +1,7 @@
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync } from "node:fs";
 
+import { validateTimerDelay } from "./timing.js";
+
 const SCANNER_URL = "https://edge.provable.com/api/scanner";
 const MAX_VIEW_KEY_FILE_BYTES = 512;
 
@@ -26,6 +28,10 @@ function parsePositiveInteger(value, name, defaultValue) {
     throw new Error(`${name} must be a positive integer`);
   }
   return parsed;
+}
+
+function parseTimerDelay(value, name, defaultValue) {
+  return validateTimerDelay(parsePositiveInteger(value, name, defaultValue), name);
 }
 
 export function loadConfig(env = process.env) {
@@ -93,6 +99,16 @@ export function loadConfig(env = process.env) {
     recordStoreFile,
     recordStorePrivate: parseBoolean(env.RECORD_STORE_PRIVATE, "RECORD_STORE_PRIVATE", true),
     scannerUrl: SCANNER_URL,
+    scanSyncPollIntervalMs: parseTimerDelay(
+      env.SCAN_SYNC_POLL_INTERVAL_MS,
+      "SCAN_SYNC_POLL_INTERVAL_MS",
+      5_000,
+    ),
+    scanSyncTimeoutMs: parseTimerDelay(
+      env.SCAN_SYNC_TIMEOUT_MS,
+      "SCAN_SYNC_TIMEOUT_MS",
+      300_000,
+    ),
     startBlock: parseStartBlock(env.SCAN_START_BLOCK),
     keyFile: viewKeyFile || privateKeyFile,
     keyKind: viewKeyFile ? "view" : "private",
