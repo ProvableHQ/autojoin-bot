@@ -37,11 +37,11 @@ test("uses network-specific USDCx program IDs", () => {
   });
   assert.equal(
     usdcxJoinCall(11, "testnet").programName,
-    "test_aj_usdcx_stablecoin_11_14.aleo",
+    "aj_test_usdcx_stablecoin_11_14.aleo",
   );
   assert.equal(
     usdcxJoinCall(16, "testnet").programName,
-    "test_aj_usdcx_stablecoin_15_16.aleo",
+    "aj_test_usdcx_stablecoin_15_16.aleo",
   );
   const testnetRecord = {
     program_name: "test_usdcx_stablecoin.aleo",
@@ -199,7 +199,7 @@ test("consolidates testnet USDCx through the prefixed program", async () => {
     },
     rescan: async () => records,
   });
-  assert.deepEqual(calls, [["test_aj_usdcx_stablecoin_2_10.aleo", "join_2"]]);
+  assert.deepEqual(calls, [["aj_test_usdcx_stablecoin_2_10.aleo", "join_2"]]);
 });
 
 test("seals canonical JSON for /prove and preserves affinity cookie", async () => {

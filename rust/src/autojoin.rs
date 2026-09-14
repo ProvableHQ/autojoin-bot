@@ -267,12 +267,12 @@ pub const fn join_call(
         (RecordFamily::Usdcx, AleoNetwork::Mainnet, 2..=10) => "aj_usdcx_stablecoin_2_10.aleo",
         (RecordFamily::Usdcx, AleoNetwork::Mainnet, 11..=14) => "aj_usdcx_stablecoin_11_14.aleo",
         (RecordFamily::Usdcx, AleoNetwork::Mainnet, 15..=16) => "aj_usdcx_stablecoin_15_16.aleo",
-        (RecordFamily::Usdcx, AleoNetwork::Testnet, 2..=10) => "test_aj_usdcx_stablecoin_2_10.aleo",
+        (RecordFamily::Usdcx, AleoNetwork::Testnet, 2..=10) => "aj_test_usdcx_stablecoin_2_10.aleo",
         (RecordFamily::Usdcx, AleoNetwork::Testnet, 11..=14) => {
-            "test_aj_usdcx_stablecoin_11_14.aleo"
+            "aj_test_usdcx_stablecoin_11_14.aleo"
         }
         (RecordFamily::Usdcx, AleoNetwork::Testnet, 15..=16) => {
-            "test_aj_usdcx_stablecoin_15_16.aleo"
+            "aj_test_usdcx_stablecoin_15_16.aleo"
         }
         (
             RecordFamily::Arc20Eth | RecordFamily::Arc20Sol | RecordFamily::Arc20Wbtc,
@@ -348,11 +348,11 @@ mod tests {
             join_call(RecordFamily::Usdcx, AleoNetwork::Testnet, 11)
                 .unwrap()
                 .0,
-            "test_aj_usdcx_stablecoin_11_14.aleo"
+            "aj_test_usdcx_stablecoin_11_14.aleo"
         );
         assert_eq!(
             join_call(RecordFamily::Usdcx, AleoNetwork::Testnet, 16),
-            Some(("test_aj_usdcx_stablecoin_15_16.aleo", "join_16"))
+            Some(("aj_test_usdcx_stablecoin_15_16.aleo", "join_16"))
         );
         assert_eq!(
             join_call(RecordFamily::Arc20Eth, AleoNetwork::Mainnet, 15),

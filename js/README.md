@@ -61,7 +61,7 @@ master pays it.
 USDCx uses `usdcx_stablecoin.aleo/Token` on mainnet and
 `test_usdcx_stablecoin.aleo/Token` on testnet. Mainnet joins use
 `aj_usdcx_stablecoin_{2_10,11_14,15_16}.aleo`; testnet joins use the matching
-`test_aj_usdcx_stablecoin_*` program ID. Each calls `join_N` for the selected
+`aj_test_usdcx_stablecoin_*` program ID. Each calls `join_N` for the selected
 batch size.
 
 ARC20 joins use `main_aj_arc20_2_15.aleo/join_N` on mainnet and
