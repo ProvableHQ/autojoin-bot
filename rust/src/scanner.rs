@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, time::Duration};
 
 use anyhow::{Context, Result, anyhow};
 use base64::{Engine, engine::general_purpose::STANDARD};
@@ -11,6 +11,7 @@ use snarkvm_console::{
     prelude::{Network, ToBytes},
     program::{Ciphertext, Record},
 };
+use tokio::time::{sleep, timeout};
 
 use crate::{http::decode_response, records::OwnedRecord};
 
@@ -32,6 +33,11 @@ struct PubkeyResponse {
 #[derive(Debug, Deserialize)]
 struct RegistrationResponse {
     uuid: String,
+}
+
+#[derive(Deserialize)]
+struct SyncStatusResponse {
+    synced: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -82,6 +88,44 @@ impl ScannerClient {
         let registration: RegistrationResponse =
             decode_response(response, "Scanner registration").await?;
         Ok(registration.uuid)
+    }
+
+    /// Wait for the initial historical scan before treating a small record set as complete.
+    pub async fn wait_for_sync<N: Network>(
+        &self,
+        view_key: &ViewKey<N>,
+        uuid: &str,
+        start_block: u32,
+        poll_interval: Duration,
+        sync_timeout: Duration,
+    ) -> Result<()> {
+        timeout(sync_timeout, async {
+            let mut re_registered = false;
+            loop {
+                let response = self
+                    .client
+                    .post(format!("{}/status", self.endpoint))
+                    .json(uuid)
+                    .send()
+                    .await
+                    .context("failed to check scanner sync status")?;
+                if response.status() == StatusCode::UNPROCESSABLE_ENTITY && !re_registered {
+                    self.register(view_key, start_block).await?;
+                    re_registered = true;
+                    continue;
+                }
+                let status: SyncStatusResponse =
+                    decode_response(response, "Record-scanner sync status").await?;
+                if status.synced {
+                    return Ok(());
+                }
+                sleep(poll_interval).await;
+            }
+        })
+        .await
+        .context(
+            "timed out waiting for initial scanner synchronization; increase SCAN_SYNC_TIMEOUT_MS",
+        )?
     }
 
     pub async fn fetch_unspent<N: Network>(

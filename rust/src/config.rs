@@ -23,6 +23,8 @@ pub struct Config {
     pub record_store_file: PathBuf,
     pub record_store_private: bool,
     pub scanner_root: String,
+    pub scan_sync_poll_interval_ms: u64,
+    pub scan_sync_timeout_ms: u64,
     pub start_block: u32,
 }
 
@@ -91,6 +93,8 @@ impl Config {
             record_store_file,
             record_store_private: parse_bool_env("RECORD_STORE_PRIVATE", true)?,
             scanner_root: EDGE_SCANNER_ROOT.into(),
+            scan_sync_poll_interval_ms: positive_u64_env("SCAN_SYNC_POLL_INTERVAL_MS", 5_000)?,
+            scan_sync_timeout_ms: positive_u64_env("SCAN_SYNC_TIMEOUT_MS", 300_000)?,
             start_block: env::var("SCAN_START_BLOCK")
                 .unwrap_or_else(|_| "0".into())
                 .parse()

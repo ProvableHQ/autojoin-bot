@@ -25,6 +25,9 @@ Optional variables:
 
 - `ALEO_NETWORK`: `testnet` (default) or `mainnet`.
 - `SCAN_START_BLOCK`: first block to scan; defaults to `0`.
+- `SCAN_SYNC_POLL_INTERVAL_MS` and `SCAN_SYNC_TIMEOUT_MS`: polling interval
+  (5 seconds) and timeout (5 minutes) for initial scanner synchronization.
+  Increase the timeout for accounts with a long scan history.
 - `RECORD_PROGRAM` and `RECORD_NAME`: narrow the returned record set.
 - `RECORD_STORE_PRIVATE`: defaults to `true`, enforcing an owner-only file and
   protected parent. Set to `false` when ownership disclosure is acceptable.
@@ -43,6 +46,14 @@ Optional variables:
   line or environment.
 - `AUTOJOIN_POLL_INTERVAL_MS` and `AUTOJOIN_TIMEOUT_MS`: scanner polling
   interval (5 seconds) and per-join timeout (5 minutes).
+
+Before the first owned-record read, the client polls `/status` until it reports
+`synced: true`. This also applies in scan-only mode. Zero or one records are
+valid final results only after that wait. A timeout or status error exits
+before any autojoin is authorized or an existing record snapshot is replaced.
+The timeout covers status requests and polling delays. HTTP 422 triggers one
+encrypted re-registration with the configured `SCAN_START_BLOCK` and a retry.
+Subsequent scans in the same run use the existing join polling flow.
 
 For 2–10 inputs the client calls `autojoin_credits_2_10.aleo/join_N`; for
 11–14 it calls `autojoin_credits_11_14.aleo/join_N`; and for 15–16 it calls

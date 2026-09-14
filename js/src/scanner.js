@@ -1,3 +1,5 @@
+import { setTimeout as delay } from "node:timers/promises";
+
 function scannerError(action, result) {
   const status = result.status ? ` (HTTP ${result.status})` : "";
   const message = result.error?.message ?? "unknown scanner error";
@@ -6,6 +8,28 @@ function scannerError(action, result) {
 
 const PAGE_SIZE = 1000;
 const TAG_BATCH_SIZE = 1000;
+
+async function waitForScannerSync({ scanner, uuid, viewKey, startBlock, pollIntervalMs, signal }) {
+  let reRegistered = false;
+  while (true) {
+    signal.throwIfAborted();
+    const status = await scanner.status(uuid);
+    signal.throwIfAborted();
+    // The SDK retries /records/owned on 422, but does not retry /status.
+    if (!status.ok && status.status === 422 && !reRegistered) {
+      const registration = await scanner.register(viewKey, startBlock);
+      if (!registration.ok) throw scannerError("Record-scanner re-registration", registration);
+      reRegistered = true;
+      continue;
+    }
+    if (!status.ok) throw scannerError("Record-scanner sync status", status);
+    if (typeof status.data?.synced !== "boolean") {
+      throw new Error("Record-scanner sync status returned an invalid synced flag");
+    }
+    if (status.data.synced) return;
+    await delay(pollIntervalMs, undefined, { signal });
+  }
+}
 
 function ownedFilter(uuid, recordProgram, recordName, page) {
   const filter = { results_per_page: PAGE_SIZE, page };
@@ -24,7 +48,9 @@ function ownedFilter(uuid, recordProgram, recordName, page) {
  *
  * The SDK performs the service's one-time /pubkey exchange and sealed-box
  * encryption before POSTing to /register/encrypted. The owned-record request
- * is then checked against /records/tags as a final spent-state guard.
+ * waits for /status to report synced before reading records. Later scans in
+ * the same run can skip this startup wait. The result is checked against
+ * /records/tags as a final spent-state guard.
  */
 export async function registerAndFetchUnspentRecords({
   sdk,
@@ -33,19 +59,43 @@ export async function registerAndFetchUnspentRecords({
   startBlock = 0,
   recordProgram,
   recordName,
+  waitForSync = true,
+  syncPollIntervalMs = 5_000,
+  syncTimeoutMs = 300_000,
 }) {
+  const controller = new AbortController();
   try {
     const scanner = new sdk.RecordScanner({
       url: scannerUrl,
       viewKeys: [viewKey],
       autoReRegister: true,
       decryptEnabled: true,
+      ...(waitForSync ? {
+        transport: (request) => fetch(request, { signal: controller.signal }),
+      } : {}),
     });
 
     const registration = await scanner.register(viewKey, startBlock);
     if (!registration.ok) throw scannerError("Record-scanner registration", registration);
 
     const uuid = registration.data.uuid.toString();
+    if (waitForSync) {
+      const timer = setTimeout(() => controller.abort(new Error(
+        "timed out waiting for initial scanner synchronization; increase SCAN_SYNC_TIMEOUT_MS",
+      )), syncTimeoutMs);
+      try {
+        await waitForScannerSync({
+          scanner, uuid, viewKey, startBlock,
+          pollIntervalMs: syncPollIntervalMs,
+          signal: controller.signal,
+        });
+      } catch (error) {
+        if (controller.signal.aborted) throw controller.signal.reason;
+        throw error;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
     const records = [];
     for (let page = 0; ; page += 1) {
       const owned = await scanner.owned(
@@ -75,6 +125,7 @@ export async function registerAndFetchUnspentRecords({
       ),
     };
   } finally {
+    controller.abort();
     viewKey.free?.();
   }
 }

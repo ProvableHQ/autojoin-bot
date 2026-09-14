@@ -19,6 +19,29 @@ test("loads Edge scanner configuration for either network", () => {
   assert.equal(config.startBlock, 42);
   assert.equal(config.keyKind, "view");
   assert.equal(config.recordStorePrivate, true);
+  assert.equal(config.scanSyncPollIntervalMs, 5_000);
+  assert.equal(config.scanSyncTimeoutMs, 300_000);
+});
+
+test("configures startup sync timing independently of join polling", () => {
+  const base = {
+    ALEO_VIEW_KEY_FILE: "/secure/key",
+    RECORD_STORE_FILE: "/secure/records.json",
+  };
+  const config = loadConfig({
+    ...base,
+    SCAN_SYNC_POLL_INTERVAL_MS: "25",
+    SCAN_SYNC_TIMEOUT_MS: "600000",
+  });
+  assert.equal(config.scanSyncPollIntervalMs, 25);
+  assert.equal(config.scanSyncTimeoutMs, 600_000);
+  assert.equal(config.autojoinPollIntervalMs, 5_000);
+  assert.equal(config.autojoinTimeoutMs, 300_000);
+  for (const name of ["SCAN_SYNC_POLL_INTERVAL_MS", "SCAN_SYNC_TIMEOUT_MS"]) {
+    for (const value of ["0", "-1", "1.5", "invalid"]) {
+      assert.throws(() => loadConfig({ ...base, [name]: value }), new RegExp(name));
+    }
+  }
 });
 
 test("rejects invalid network and start block values", () => {

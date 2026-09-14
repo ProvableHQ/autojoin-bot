@@ -12,11 +12,19 @@ async function main() {
   const privateKey = config.keyKind === "private"
     ? sdk.PrivateKey.from_string(encodedKey)
     : undefined;
+  let waitForInitialSync = true;
   const scan = async (filters = {}) => {
     const viewKey = privateKey
       ? sdk.ViewKey.from_private_key(privateKey)
       : sdk.ViewKey.from_string(encodedKey);
-    return registerAndFetchUnspentRecords({ sdk, viewKey, ...config, ...filters });
+    const result = await registerAndFetchUnspentRecords({
+      sdk, viewKey, ...config, ...filters,
+      waitForSync: waitForInitialSync,
+      syncPollIntervalMs: config.scanSyncPollIntervalMs,
+      syncTimeoutMs: config.scanSyncTimeoutMs,
+    });
+    waitForInitialSync = false;
+    return result;
   };
 
   let result;
