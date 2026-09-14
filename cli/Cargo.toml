@@ -1,0 +1,19 @@
+[package]
+name = "autojoin-cli"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1"
+base64 = "0.22"
+crypto_box = { version = "0.9", features = ["seal"] }
+libc = "0.2"
+rand = "0.10"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+snarkvm-circuit-network = "=4.9.1"
+snarkvm-console = { version = "=4.9.1", default-features = false, features = ["account", "program"] }
+snarkvm-synthesizer = { version = "=4.9.1", default-features = false }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time"] }
+zeroize = "1"

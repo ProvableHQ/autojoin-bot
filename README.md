@@ -4,6 +4,12 @@ Programmatic Aleo autojoin bot implementations:
 
 - [`js/`](js/README.md).
 - [`rust/`](rust/README.md).
+- [`cli/`](cli/README.md), a standalone continuous foreground/background
+  implementation.
+
+Both language implementations are deliberately one-shot examples. The
+separate CLI provides interactive configuration and foreground or optional
+detached continuous operation.
 
 Outside of Shield wallet, users interacting with DEX contracts require a programmatic solution for both record management and autojoin.  This repository provides example implementations of an autojoin-bot in both Rust and JS for programmatic traders. Both securely load either a view key or private key from an owner-only file, register the derived view key through the encrypted one-time-key flow, fetch owned records with `unspent: true`, and verify their tags against
 `/records/tags`. The resulting ciphertexts and input-selection metadata are
