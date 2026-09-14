@@ -198,13 +198,12 @@ fn authorize<N: Network, A: Aleo<Network = N>>(
         records
             .iter()
             .map(|record| {
-                ProgramValue::<N>::from_str(
-                    record
-                        .record_plaintext
-                        .as_deref()
-                        .expect("owned records were validated"),
-                )
-                .context("scanner returned an invalid record plaintext")
+                let plaintext = record
+                    .record_plaintext
+                    .as_deref()
+                    .context("owned record is missing a decrypted plaintext")?;
+                ProgramValue::<N>::from_str(plaintext)
+                    .context("scanner returned an invalid record plaintext")
             })
             .collect::<Result<Vec<_>>>()?,
     );

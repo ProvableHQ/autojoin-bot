@@ -28,7 +28,6 @@ async function main() {
     arc20Wbtc: 0,
   };
   try {
-    result = await scan();
     const enabledFamilies = [
       [config.autojoinCredits, "credits"],
       [config.autojoinUsdcx, "usdcx"],
@@ -62,8 +61,8 @@ async function main() {
       for (const [, familyName] of enabledFamilies) {
         joinCounts[familyName] = (await runFamily(JOIN_FAMILIES[familyName])).joins;
       }
-      result = await scan();
     }
+    result = await scan();
   } finally {
     privateKey?.free?.();
   }
