@@ -285,10 +285,10 @@ fn prompt_secret(label: &str) -> Result<Zeroizing<String>> {
     print!("{label} (input hidden): ");
     io::stdout().flush()?;
     let mut value = Zeroizing::new(String::new());
-    io::stdin().read_line(&mut value)?;
+    let bytes_read = io::stdin().read_line(&mut value)?;
     println!();
-    if value.trim().is_empty() {
-        bail!("key cannot be empty");
+    if bytes_read == 0 {
+        bail!("key input was closed");
     }
     Ok(value)
 }
@@ -302,6 +302,13 @@ fn configure_key(
     if method == "paste" {
         let key = loop {
             let key = prompt_secret(&format!("Paste {key_kind} key"))?;
+            if key.trim().is_empty() {
+                println!(
+                    "{}",
+                    ui::warning("The key cannot be empty. Please try again.")
+                );
+                continue;
+            }
             if validate_account_key(network, key_kind, key.trim()).is_ok() {
                 break key;
             }
