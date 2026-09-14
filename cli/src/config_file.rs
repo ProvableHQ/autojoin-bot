@@ -1,12 +1,17 @@
 use crate::{Config, LogLevel};
 use anyhow::{Context, Result, bail};
+use snarkvm_console::{
+    account::{PrivateKey, ViewKey},
+    prelude::{MainnetV0, TestnetV0},
+};
 use std::{
     collections::BTreeMap,
     fs::{self, File, OpenOptions},
     io::{self, BufRead, BufReader, Write},
     os::unix::fs::{OpenOptionsExt, PermissionsExt},
-    path::Path,
+    path::{Path, PathBuf},
 };
+use zeroize::Zeroizing;
 
 const CONFIG_KEYS: &[&str] = &[
     "ALEO_NETWORK",
@@ -49,11 +54,12 @@ pub fn init(path: &Path, force: bool) -> Result<()> {
         );
     }
     println!("Creating {}", path.display());
-    println!("Enter paths to secret files, never private/view keys themselves.\n");
+    println!("Keys can be pasted securely or loaded from an existing protected file.\n");
 
     let network = prompt_choice("Network", &["testnet", "mainnet"], "testnet")?;
-    let key_kind = prompt_choice("Key type", &["view", "private"], "view")?;
-    let key_path = prompt_required(&format!("Path to {key_kind} key file"))?;
+    let key_kind = prompt_choice("Account key", &["private", "view"], "private")?;
+    let key_method = prompt_choice("Provide key by", &["paste", "file"], "paste")?;
+    let key_path = configure_key(path, &network, &key_kind, &key_method)?;
     let start_block = prompt_u64("Scanner start block", 0)?;
     let record_store = prompt_default(
         "Ciphertext record store",
@@ -212,6 +218,125 @@ fn prompt(label: &str) -> Result<String> {
     Ok(value.trim().to_owned())
 }
 
+fn prompt_secret(label: &str) -> Result<Zeroizing<String>> {
+    if unsafe { libc::isatty(libc::STDIN_FILENO) } != 1 {
+        bail!("secure key paste requires an interactive terminal; choose the file option instead");
+    }
+    let mut original = unsafe { std::mem::zeroed::<libc::termios>() };
+    if unsafe { libc::tcgetattr(libc::STDIN_FILENO, &mut original) } != 0 {
+        return Err(io::Error::last_os_error()).context("failed to protect terminal input");
+    }
+    let mut protected = original;
+    protected.c_lflag &= !libc::ECHO;
+    if unsafe { libc::tcsetattr(libc::STDIN_FILENO, libc::TCSAFLUSH, &protected) } != 0 {
+        return Err(io::Error::last_os_error()).context("failed to disable terminal echo");
+    }
+    let _guard = EchoGuard(original);
+    print!("{label} (input hidden): ");
+    io::stdout().flush()?;
+    let mut value = Zeroizing::new(String::new());
+    io::stdin().read_line(&mut value)?;
+    println!();
+    if value.trim().is_empty() {
+        bail!("key cannot be empty");
+    }
+    Ok(value)
+}
+
+fn configure_key(
+    config_path: &Path,
+    network: &str,
+    key_kind: &str,
+    method: &str,
+) -> Result<String> {
+    if method == "paste" {
+        let key = loop {
+            let key = prompt_secret(&format!("Paste {key_kind} key"))?;
+            if validate_account_key(network, key_kind, key.trim()).is_ok() {
+                break key;
+            }
+            println!("That is not a valid {network} {key_kind} key. Please try again.");
+        };
+        let default = default_key_path(config_path, key_kind)
+            .display()
+            .to_string();
+        loop {
+            let destination = prompt_default("Save protected key file", &default)?;
+            if Path::new(&destination).exists() {
+                println!(
+                    "That file already exists. Choose a new path or restart using the file option."
+                );
+                continue;
+            }
+            write_secret_file(Path::new(&destination), key.trim())?;
+            println!("Key saved with mode 0600.");
+            return Ok(destination);
+        }
+    }
+
+    loop {
+        let existing = prompt_required(&format!("Existing {key_kind} key file"))?;
+        match crate::read_secure_key_file(Path::new(&existing)) {
+            Ok(key) if validate_account_key(network, key_kind, key.trim()).is_ok() => {
+                return Ok(existing);
+            }
+            Ok(_) => println!("That file does not contain a valid {network} {key_kind} key."),
+            Err(error) => println!("Cannot use that key file: {error}"),
+        }
+    }
+}
+
+struct EchoGuard(libc::termios);
+
+impl Drop for EchoGuard {
+    fn drop(&mut self) {
+        unsafe {
+            libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &self.0);
+        }
+    }
+}
+
+fn default_key_path(config_path: &Path, key_kind: &str) -> PathBuf {
+    let parent = config_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    parent.join(format!("account.{key_kind}key"))
+}
+
+fn write_secret_file(path: &Path, secret: &str) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)
+        .with_context(|| {
+            format!(
+                "failed to create protected key file {}; choose a new path if it already exists",
+                path.display()
+            )
+        })?;
+    writeln!(file, "{secret}")?;
+    file.sync_all()?;
+    Ok(())
+}
+
+fn validate_account_key(network: &str, key_kind: &str, key: &str) -> Result<()> {
+    let valid = match (network, key_kind) {
+        ("mainnet", "private") => key.parse::<PrivateKey<MainnetV0>>().map(|_| ()),
+        ("testnet", "private") => key.parse::<PrivateKey<TestnetV0>>().map(|_| ()),
+        ("mainnet", "view") => key.parse::<ViewKey<MainnetV0>>().map(|_| ()),
+        ("testnet", "view") => key.parse::<ViewKey<TestnetV0>>().map(|_| ()),
+        _ => unreachable!("choices are validated before key input"),
+    };
+    valid.map_err(|_| anyhow::anyhow!("invalid {network} {key_kind} key"))
+}
+
 fn prompt_required(label: &str) -> Result<String> {
     loop {
         let value = prompt(label)?;
@@ -278,10 +403,39 @@ fn prompt_positive_u64(label: &str, default: u64) -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn config_values_reject_line_injection() {
         assert!(validate_value("/safe/key").is_ok());
         assert!(validate_value("/safe/key\nEVIL=value").is_err());
+    }
+
+    #[test]
+    fn validates_keys_for_the_selected_network() {
+        let private_key = PrivateKey::<MainnetV0>::new(&mut rand::rng()).unwrap();
+        let view_key = ViewKey::try_from(&private_key).unwrap();
+        assert!(validate_account_key("mainnet", "private", &private_key.to_string()).is_ok());
+        assert!(validate_account_key("mainnet", "view", &view_key.to_string()).is_ok());
+        assert!(validate_account_key("mainnet", "private", "not-a-key").is_err());
+    }
+
+    #[test]
+    fn pasted_keys_are_written_owner_only() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory =
+            std::env::temp_dir().join(format!("autojoin-cli-key-{}-{unique}", std::process::id()));
+        let path = directory.join("account.privatekey");
+        write_secret_file(&path, "secret-value").unwrap();
+        let metadata = fs::metadata(&path).unwrap();
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+        assert_eq!(
+            &*crate::read_secure_key_file(&path).unwrap(),
+            "secret-value\n"
+        );
+        fs::remove_dir_all(directory).unwrap();
     }
 }

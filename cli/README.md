@@ -21,9 +21,15 @@ All commands accept `--config PATH`; the default is
 `~/.config/autojoin-bot/config.env`. `init --force` replaces an existing
 configuration.
 
-The configuration contains paths to key and delegated-proving token files,
-never their contents, and is written with mode `0600`. The Rust library still
-performs its owner/permission/symlink checks whenever it opens a secret file.
+During `init`, choose whether to paste a private/view key or use an existing
+protected key file. Pasted input is hidden by disabling terminal echo,
+validated for the selected network, and written to a new mode-`0600` file. The
+CLI refuses to overwrite an existing key file. When the file option is chosen,
+the existing file is checked before setup continues.
+
+The configuration contains only the resulting key-file path, never the key
+itself, and is also written with mode `0600`. Every subsequent key read rejects
+symlinks, files not owned by the current user, and group/world permissions.
 
 `run` executes one pass at a time and waits `CLI_INTERVAL_SECONDS` after each
 completed pass. A failed pass is reported and retried after that interval.
