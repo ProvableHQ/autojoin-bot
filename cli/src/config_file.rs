@@ -85,7 +85,7 @@ pub fn init(path: &Path, force: bool) -> Result<()> {
         &format!("./records-{network}.json"),
     )?;
     let decrypted_store = prompt("Decrypted record store (blank to disable)")?;
-    let private_ciphertexts = prompt_bool("Restrict ciphertext store to its owner", false)?;
+    let private_ciphertexts = prompt_bool("Restrict ciphertext store to its owner", true)?;
 
     let mut values = BTreeMap::new();
     values.insert("ALEO_NETWORK", network);

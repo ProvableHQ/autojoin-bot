@@ -70,6 +70,11 @@ sidecar beside the configuration; `.pid` tracks the worker. `status` reports
 both the worker PID and its active log path and level. SIGINT and SIGTERM cancel
 an in-progress pass and shut the worker down cleanly.
 
+The worker holds an advisory lock on its owner-only PID file for its entire
+lifetime. `stop` never signals the numeric PID; it writes an owner-only
+cooperative stop request that the locked worker monitors. Unlocked PID files are
+treated as stale, so PID reuse cannot cause an unrelated process to be killed.
+
 ## Logging
 
 `init` prompts for an optional log level and log file. The corresponding

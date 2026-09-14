@@ -165,5 +165,6 @@ mod tests {
             Config::from_values(&values).unwrap().delegated_proving_url,
             "https://edge.provable.com/api/prove/mainnet"
         );
+        assert!(Config::from_values(&values).unwrap().record_store_private);
     }
 }
