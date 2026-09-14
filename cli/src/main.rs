@@ -9,6 +9,7 @@ mod scanner;
 mod secret;
 mod store;
 mod supervisor;
+mod ui;
 mod workflow;
 
 pub use autojoin::DelegatedProverClient;
@@ -90,7 +91,7 @@ fn default_config_path() -> Result<PathBuf> {
 
 fn print_help() {
     println!(
-        "autojoin-cli — configure and run the Rust autojoin library\n\n\
+        "autojoin-cli — configure and run the standalone autojoin worker\n\n\
 Usage: autojoin-cli <COMMAND> [OPTIONS]\n\n\
 Commands:\n  init    Interactively create a configuration\n  once    Run one scan/autojoin pass\n  run     Run continuously in the foreground\n  start   Run continuously as a detached background process\n  stop    Gracefully stop the background process\n  status  Report whether the background process is running\n\n\
 Options:\n  --config <PATH>  Configuration file path\n  --force          Replace an existing config (init only)\n\n\

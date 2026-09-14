@@ -31,6 +31,20 @@ The configuration contains only the resulting key-file path, never the key
 itself, and is also written with mode `0600`. Every subsequent key read rejects
 symlinks, files not owned by the current user, and group/world permissions.
 
+The wizard starts by selecting an operating mode:
+
+- `autojoin` requires a private key and at least one asset family. Its view key
+  is derived in memory for scanner operations.
+- `scan-only` accepts either key type and defaults to the less-privileged view
+  key. It cannot enable autojoin families.
+
+Mainnet is the default network both in the wizard and when `ALEO_NETWORK` is
+omitted from a hand-written configuration.
+
+Interactive prompts and lifecycle status use terminal-aware color. ANSI escape
+sequences are omitted when output is redirected. Set the standard `NO_COLOR`
+environment variable to disable color explicitly.
+
 `run` executes one pass at a time and waits `CLI_INTERVAL_SECONDS` after each
 completed pass. A failed pass is reported and retried after that interval.
 `start` runs that loop in a detached session and sends output to the `.log`

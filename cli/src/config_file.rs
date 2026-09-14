@@ -1,3 +1,4 @@
+use crate::ui;
 use crate::{Config, LogLevel};
 use anyhow::{Context, Result, bail};
 use snarkvm_console::{
@@ -37,6 +38,7 @@ const CONFIG_KEYS: &[&str] = &[
     "CLI_INTERVAL_SECONDS",
     "CLI_LOG_LEVEL",
     "CLI_LOG_FILE",
+    "CLI_MODE",
 ];
 
 pub struct RuntimeConfig {
@@ -53,11 +55,26 @@ pub fn init(path: &Path, force: bool) -> Result<()> {
             path.display()
         );
     }
-    println!("Creating {}", path.display());
-    println!("Keys can be pasted securely or loaded from an existing protected file.\n");
+    println!("{}", ui::heading("Autojoin CLI setup"));
+    println!("{} {}", ui::muted("Configuration:"), path.display());
+    println!(
+        "{}\n",
+        ui::muted("Keys can be pasted securely or loaded from an existing protected file.")
+    );
 
-    let network = prompt_choice("Network", &["testnet", "mainnet"], "testnet")?;
-    let key_kind = prompt_choice("Account key", &["private", "view"], "private")?;
+    let network = prompt_choice("Network", &["mainnet", "testnet"], "mainnet")?;
+    let mode = prompt_choice("Operating mode", &["autojoin", "scan-only"], "autojoin")?;
+    let key_kind = if mode == "autojoin" {
+        println!(
+            "{}",
+            ui::muted(
+                "Autojoin signs locally, so a private key is required; its view key is derived in memory."
+            )
+        );
+        "private".to_owned()
+    } else {
+        prompt_choice("Account key", &["view", "private"], "view")?
+    };
     let key_method = prompt_choice("Provide key by", &["paste", "file"], "paste")?;
     let key_path = configure_key(path, &network, &key_kind, &key_method)?;
     let start_block = prompt_u64("Scanner start block", 0)?;
@@ -70,6 +87,7 @@ pub fn init(path: &Path, force: bool) -> Result<()> {
 
     let mut values = BTreeMap::new();
     values.insert("ALEO_NETWORK", network);
+    values.insert("CLI_MODE", mode.clone());
     values.insert(
         if key_kind == "private" {
             "ALEO_PRIVATE_KEY_FILE"
@@ -95,17 +113,28 @@ pub fn init(path: &Path, force: bool) -> Result<()> {
     }
 
     let mut any_autojoin = false;
-    if key_kind == "private" {
-        for (label, name) in [
-            ("ALEO credits", "AUTOJOIN_CREDITS"),
-            ("USDCx", "AUTOJOIN_USDCX"),
-            ("ARC20 ETH", "AUTOJOIN_ARC20_ETH"),
-            ("ARC20 SOL", "AUTOJOIN_ARC20_SOL"),
-            ("ARC20 WBTC", "AUTOJOIN_ARC20_WBTC"),
-        ] {
-            let enabled = prompt_bool(&format!("Enable {label} autojoin"), false)?;
-            values.insert(name, enabled.to_string());
-            any_autojoin |= enabled;
+    if mode == "autojoin" {
+        loop {
+            any_autojoin = false;
+            println!("\n{}", ui::heading("Assets to consolidate"));
+            for (label, name) in [
+                ("ALEO credits", "AUTOJOIN_CREDITS"),
+                ("USDCx", "AUTOJOIN_USDCX"),
+                ("ARC20 ETH", "AUTOJOIN_ARC20_ETH"),
+                ("ARC20 SOL", "AUTOJOIN_ARC20_SOL"),
+                ("ARC20 WBTC", "AUTOJOIN_ARC20_WBTC"),
+            ] {
+                let enabled = prompt_bool(&format!("Enable {label} autojoin"), false)?;
+                values.insert(name, enabled.to_string());
+                any_autojoin |= enabled;
+            }
+            if any_autojoin {
+                break;
+            }
+            println!(
+                "{}",
+                ui::warning("Select at least one asset for autojoin mode.")
+            );
         }
     }
     if any_autojoin {
@@ -156,7 +185,8 @@ pub fn init(path: &Path, force: bool) -> Result<()> {
         writeln!(file, "{name}={value}")?;
     }
     file.sync_all()?;
-    println!("Configuration written with mode 0600. Run `autojoin-cli once` to verify it.");
+    println!("{}", ui::success("Configuration written with mode 0600."));
+    println!("{}", ui::muted("Run `autojoin-cli once` to verify it."));
     Ok(())
 }
 
@@ -181,6 +211,26 @@ pub fn load(path: &Path) -> Result<RuntimeConfig> {
         }
         validate_value(value)?;
         values.insert(name.to_owned(), value.to_owned());
+    }
+    let mode = values.remove("CLI_MODE");
+    let any_autojoin = [
+        "AUTOJOIN_CREDITS",
+        "AUTOJOIN_USDCX",
+        "AUTOJOIN_ARC20_ETH",
+        "AUTOJOIN_ARC20_SOL",
+        "AUTOJOIN_ARC20_WBTC",
+    ]
+    .iter()
+    .any(|name| values.get(*name).is_some_and(|value| value == "true"));
+    match mode.as_deref() {
+        Some("autojoin") if !any_autojoin => {
+            bail!("CLI_MODE=autojoin requires at least one AUTOJOIN_* family")
+        }
+        Some("scan-only") if any_autojoin => {
+            bail!("CLI_MODE=scan-only cannot enable an AUTOJOIN_* family")
+        }
+        Some("autojoin" | "scan-only") | None => {}
+        Some(_) => bail!("CLI_MODE must be autojoin or scan-only"),
     }
     let interval_seconds = values
         .remove("CLI_INTERVAL_SECONDS")
@@ -211,7 +261,7 @@ fn validate_value(value: &str) -> Result<()> {
 }
 
 fn prompt(label: &str) -> Result<String> {
-    print!("{label}: ");
+    print!("{}: ", ui::prompt(label));
     io::stdout().flush()?;
     let mut value = String::new();
     io::stdin().read_line(&mut value)?;
@@ -255,7 +305,12 @@ fn configure_key(
             if validate_account_key(network, key_kind, key.trim()).is_ok() {
                 break key;
             }
-            println!("That is not a valid {network} {key_kind} key. Please try again.");
+            println!(
+                "{}",
+                ui::warning(&format!(
+                    "That is not a valid {network} {key_kind} key. Please try again."
+                ))
+            );
         };
         let default = default_key_path(config_path, key_kind)
             .display()
@@ -264,12 +319,15 @@ fn configure_key(
             let destination = prompt_default("Save protected key file", &default)?;
             if Path::new(&destination).exists() {
                 println!(
-                    "That file already exists. Choose a new path or restart using the file option."
+                    "{}",
+                    ui::warning(
+                        "That file already exists. Choose a new path or restart using the file option."
+                    )
                 );
                 continue;
             }
             write_secret_file(Path::new(&destination), key.trim())?;
-            println!("Key saved with mode 0600.");
+            println!("{}", ui::success("Key saved with mode 0600."));
             return Ok(destination);
         }
     }
@@ -280,8 +338,16 @@ fn configure_key(
             Ok(key) if validate_account_key(network, key_kind, key.trim()).is_ok() => {
                 return Ok(existing);
             }
-            Ok(_) => println!("That file does not contain a valid {network} {key_kind} key."),
-            Err(error) => println!("Cannot use that key file: {error}"),
+            Ok(_) => println!(
+                "{}",
+                ui::warning(&format!(
+                    "That file does not contain a valid {network} {key_kind} key."
+                ))
+            ),
+            Err(error) => println!(
+                "{}",
+                ui::warning(&format!("Cannot use that key file: {error}"))
+            ),
         }
     }
 }
@@ -343,7 +409,7 @@ fn prompt_required(label: &str) -> Result<String> {
         if !value.is_empty() {
             return Ok(value);
         }
-        println!("A value is required.");
+        println!("{}", ui::warning("A value is required."));
     }
 }
 
@@ -362,7 +428,10 @@ fn prompt_choice(label: &str, choices: &[&str], default: &str) -> Result<String>
         if choices.contains(&value.as_str()) {
             return Ok(value);
         }
-        println!("Choose one of: {}", choices.join(", "));
+        println!(
+            "{}",
+            ui::warning(&format!("Choose one of: {}", choices.join(", ")))
+        );
     }
 }
 
@@ -376,7 +445,7 @@ fn prompt_bool(label: &str, default: bool) -> Result<bool> {
             "" => return Ok(default),
             "y" | "yes" => return Ok(true),
             "n" | "no" => return Ok(false),
-            _ => println!("Enter yes or no."),
+            _ => println!("{}", ui::warning("Enter yes or no.")),
         }
     }
 }
@@ -385,7 +454,7 @@ fn prompt_u64(label: &str, default: u64) -> Result<u64> {
     loop {
         match prompt_default(label, &default.to_string())?.parse() {
             Ok(value) => return Ok(value),
-            Err(_) => println!("Enter a non-negative integer."),
+            Err(_) => println!("{}", ui::warning("Enter a non-negative integer.")),
         }
     }
 }
@@ -396,7 +465,7 @@ fn prompt_positive_u64(label: &str, default: u64) -> Result<u64> {
         if value > 0 {
             return Ok(value);
         }
-        println!("Enter a positive integer.");
+        println!("{}", ui::warning("Enter a positive integer."));
     }
 }
 

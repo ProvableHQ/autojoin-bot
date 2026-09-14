@@ -68,7 +68,7 @@ impl Config {
         let any_arc20 = autojoin_arc20_eth || autojoin_arc20_sol || autojoin_arc20_wbtc;
         let any_autojoin = autojoin_credits || autojoin_usdcx || any_arc20;
         let network = optional("ALEO_NETWORK")
-            .unwrap_or_else(|| "testnet".into())
+            .unwrap_or_else(|| "mainnet".into())
             .parse()?;
         if any_autojoin && !matches!(key_source, KeySource::PrivateKey(_)) {
             bail!("autojoin requires ALEO_PRIVATE_KEY_FILE to sign authorizations");
@@ -150,4 +150,24 @@ fn validate_prover_url(url: &str) -> Result<()> {
         bail!("DELEGATED_PROVING_URL must use HTTPS (HTTP is allowed only for localhost)");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mainnet_is_the_default_network() {
+        let values = BTreeMap::from([
+            (
+                "ALEO_VIEW_KEY_FILE".to_owned(),
+                "/secure/view.key".to_owned(),
+            ),
+            ("RECORD_STORE_FILE".to_owned(), "records.json".to_owned()),
+        ]);
+        assert_eq!(
+            Config::from_values(&values).unwrap().network,
+            AleoNetwork::Mainnet
+        );
+    }
 }

@@ -2,6 +2,7 @@ use crate::run_once;
 use crate::{
     LogLevel, config_file,
     logging::{self, event},
+    ui,
     workflow::RunSummary,
 };
 use anyhow::{Context, Result, bail};
@@ -54,7 +55,11 @@ pub async fn run(config_path: &Path, foreground: bool) -> Result<()> {
     let mut interrupt = signal(SignalKind::interrupt())?;
     let mut terminate = signal(SignalKind::terminate())?;
     if foreground {
-        println!("Continuous worker started; press Ctrl-C to stop.");
+        println!(
+            "{} {}",
+            ui::success("Continuous worker started."),
+            ui::muted("Press Ctrl-C to stop.")
+        );
     }
     event(
         LogLevel::Info,
@@ -94,7 +99,7 @@ pub async fn run(config_path: &Path, foreground: bool) -> Result<()> {
         }
     }
     if foreground {
-        println!("Continuous worker stopped.");
+        println!("{}", ui::success("Continuous worker stopped."));
     }
     event(LogLevel::Info, format_args!("worker stopped"));
     Ok(())
@@ -158,8 +163,9 @@ pub fn start(config: &Path) -> Result<()> {
     while Instant::now() < deadline {
         if let Some(pid) = live_pid(&pid_path)? {
             println!(
-                "Background worker started (PID {pid}); log: {}",
-                log_path.display()
+                "{} {}",
+                ui::success(&format!("Background worker started (PID {pid}).")),
+                ui::muted(&format!("Log: {}", log_path.display()))
             );
             return Ok(());
         }
@@ -184,7 +190,7 @@ pub async fn stop(config: &Path) -> Result<()> {
     while Instant::now() < deadline {
         if !process_alive(pid) {
             let _ = fs::remove_file(&pid_path);
-            println!("Background worker stopped.");
+            println!("{}", ui::success("Background worker stopped."));
             return Ok(());
         }
         sleep(Duration::from_millis(100)).await;
@@ -194,8 +200,8 @@ pub async fn stop(config: &Path) -> Result<()> {
 
 pub fn status(config: &Path) -> Result<()> {
     match live_pid(&sidecar(config, "pid"))? {
-        Some(pid) => println!("running (PID {pid})"),
-        None => println!("stopped"),
+        Some(pid) => println!("{}", ui::success(&format!("running (PID {pid})"))),
+        None => println!("{}", ui::muted("stopped")),
     }
     Ok(())
 }
