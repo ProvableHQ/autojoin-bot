@@ -110,6 +110,7 @@ impl ScannerClient {
                     .await
                     .context("failed to check scanner sync status")?;
                 if response.status() == StatusCode::UNPROCESSABLE_ENTITY && !re_registered {
+                    // RSS derives the UUID from the view key, so re-registration preserves it.
                     self.register(view_key, start_block).await?;
                     re_registered = true;
                     continue;

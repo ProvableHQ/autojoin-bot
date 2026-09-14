@@ -1,5 +1,7 @@
 import { setTimeout as delay } from "node:timers/promises";
 
+import { validateTimerDelay } from "./timing.js";
+
 function scannerError(action, result) {
   const status = result.status ? ` (HTTP ${result.status})` : "";
   const message = result.error?.message ?? "unknown scanner error";
@@ -17,6 +19,7 @@ async function waitForScannerSync({ scanner, uuid, viewKey, startBlock, pollInte
     signal.throwIfAborted();
     // The SDK retries /records/owned on 422, but does not retry /status.
     if (!status.ok && status.status === 422 && !reRegistered) {
+      // RSS derives the UUID from the view key, so re-registration preserves it.
       const registration = await scanner.register(viewKey, startBlock);
       if (!registration.ok) throw scannerError("Record-scanner re-registration", registration);
       reRegistered = true;
@@ -65,6 +68,10 @@ export async function registerAndFetchUnspentRecords({
 }) {
   const controller = new AbortController();
   try {
+    if (waitForSync) {
+      validateTimerDelay(syncPollIntervalMs, "SCAN_SYNC_POLL_INTERVAL_MS");
+      validateTimerDelay(syncTimeoutMs, "SCAN_SYNC_TIMEOUT_MS");
+    }
     const scanner = new sdk.RecordScanner({
       url: scannerUrl,
       viewKeys: [viewKey],

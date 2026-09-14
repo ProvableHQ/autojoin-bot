@@ -44,6 +44,24 @@ test("configures startup sync timing independently of join polling", () => {
   }
 });
 
+test("limits startup sync timing to the Node timer range", () => {
+  const base = {
+    ALEO_VIEW_KEY_FILE: "/secure/key",
+    RECORD_STORE_FILE: "/secure/records.json",
+  };
+  for (const [name, property] of [
+    ["SCAN_SYNC_POLL_INTERVAL_MS", "scanSyncPollIntervalMs"],
+    ["SCAN_SYNC_TIMEOUT_MS", "scanSyncTimeoutMs"],
+  ]) {
+    for (const value of [1, 2_147_483_647]) {
+      assert.equal(loadConfig({ ...base, [name]: String(value) })[property], value);
+    }
+    for (const value of ["2147483648", "2592000000"]) {
+      assert.throws(() => loadConfig({ ...base, [name]: value }), new RegExp(`${name}.*2147483647`));
+    }
+  }
+});
+
 test("rejects invalid network and start block values", () => {
   const base = {
     ALEO_VIEW_KEY_FILE: "/secure/key",

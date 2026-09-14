@@ -128,6 +128,24 @@ test("skips the startup sync wait on subsequent scans", async () => {
   assert.equal(calls.some(([name]) => name === "status"), false);
 });
 
+for (const [option, name] of [
+  ["syncPollIntervalMs", "SCAN_SYNC_POLL_INTERVAL_MS"],
+  ["syncTimeoutMs", "SCAN_SYNC_TIMEOUT_MS"],
+]) {
+  test(`rejects oversized ${option} before registering and releases the view key`, async () => {
+    for (const value of [2_147_483_648, 30 * 24 * 60 * 60 * 1_000]) {
+      const { sdk, calls } = fakeSdk();
+      await assert.rejects(registerAndFetchUnspentRecords({
+        sdk,
+        viewKey: { free: () => calls.push(["free-view-key"]) },
+        scannerUrl: "https://scanner.example",
+        [option]: value,
+      }), new RegExp(`${name}.*2147483647`));
+      assert.deepEqual(calls, [["free-view-key"]]);
+    }
+  });
+}
+
 test("times out without reading partial records and releases the view key", async () => {
   const { sdk, calls } = fakeSdk({
     status: () => ({ ok: true, data: { synced: false, percentage: 0 } }),

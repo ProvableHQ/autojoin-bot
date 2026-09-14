@@ -27,7 +27,8 @@ Optional variables:
 - `SCAN_START_BLOCK`: first block to scan; defaults to `0`.
 - `SCAN_SYNC_POLL_INTERVAL_MS` and `SCAN_SYNC_TIMEOUT_MS`: polling interval
   (5 seconds) and timeout (5 minutes) for initial scanner synchronization.
-  Increase the timeout for accounts with a long scan history.
+  Increase the timeout for accounts with a long scan history. Both must be
+  integers from `1` to `2147483647` milliseconds (Node's timer limit, about 24.9 days).
 - `RECORD_PROGRAM` and `RECORD_NAME`: narrow the returned record set.
 - `RECORD_STORE_PRIVATE`: defaults to `true`, enforcing an owner-only file and
   protected parent. Set to `false` when ownership disclosure is acceptable.
