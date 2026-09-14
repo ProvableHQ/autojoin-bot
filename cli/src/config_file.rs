@@ -321,12 +321,14 @@ fn configure_key(
                 ))
             );
         };
-        let default = default_key_path(config_path, key_kind)
-            .display()
-            .to_string();
+        let default_path = make_absolute(&default_key_path(config_path, key_kind))?;
+        let default = path_config_value(&default_path)?;
         loop {
-            let destination = prompt_default("Save protected key file", &default)?;
-            if Path::new(&destination).exists() {
+            let destination = make_absolute(Path::new(&prompt_default(
+                "Save protected key file",
+                &default,
+            )?))?;
+            if destination.exists() {
                 println!(
                     "{}",
                     ui::warning(
@@ -335,17 +337,19 @@ fn configure_key(
                 );
                 continue;
             }
-            write_secret_file(Path::new(&destination), key.trim())?;
+            write_secret_file(&destination, key.trim())?;
             println!("{}", ui::success("Key saved with mode 0600."));
-            return Ok(destination);
+            return path_config_value(&destination);
         }
     }
 
     loop {
-        let existing = prompt_required(&format!("Existing {key_kind} key file"))?;
-        match crate::read_secure_key_file(Path::new(&existing)) {
+        let existing = make_absolute(Path::new(&prompt_required(&format!(
+            "Existing {key_kind} key file"
+        ))?))?;
+        match crate::read_secure_key_file(&existing) {
             Ok(key) if validate_account_key(network, key_kind, key.trim()).is_ok() => {
-                return Ok(existing);
+                return path_config_value(&existing);
             }
             Ok(_) => println!(
                 "{}",
@@ -377,6 +381,21 @@ fn default_key_path(config_path: &Path, key_kind: &str) -> PathBuf {
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
     parent.join(format!("account.{key_kind}key"))
+}
+
+fn make_absolute(path: &Path) -> Result<PathBuf> {
+    if path.is_absolute() {
+        return Ok(path.to_owned());
+    }
+    Ok(std::env::current_dir()
+        .context("failed to determine the current directory")?
+        .join(path))
+}
+
+fn path_config_value(path: &Path) -> Result<String> {
+    path.to_str()
+        .map(str::to_owned)
+        .context("key file path must be valid UTF-8")
 }
 
 fn write_secret_file(path: &Path, secret: &str) -> Result<()> {
@@ -515,5 +534,15 @@ mod tests {
             "secret-value\n"
         );
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn relative_key_paths_are_made_absolute() {
+        let relative = Path::new("keys/account.privatekey");
+        let absolute = make_absolute(relative).unwrap();
+
+        assert!(absolute.is_absolute());
+        assert_eq!(absolute, std::env::current_dir().unwrap().join(relative));
+        assert_eq!(make_absolute(&absolute).unwrap(), absolute);
     }
 }
