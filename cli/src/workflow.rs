@@ -151,17 +151,12 @@ async fn run<N: Network, A: Aleo<Network = N>>(
         KeySource::PrivateKey(_) => ViewKey::try_from(private_key.as_ref().expect("parsed above"))
             .map_err(|error| anyhow::anyhow!("failed to derive view key: {error}"))?,
     };
-    let scanner = ScannerClient::new(config.endpoint());
-    let uuid = scanner.register(&view_key, config.start_block).await?;
-    scanner
-        .wait_for_sync(
-            &view_key,
-            &uuid,
-            config.start_block,
-            Duration::from_millis(config.scan_sync_poll_interval_ms),
-            Duration::from_millis(config.scan_sync_timeout_ms),
-        )
-        .await?;
+    let scanner = ScannerClient::new(
+        config.endpoint(),
+        Duration::from_millis(config.scan_sync_poll_interval_ms),
+        Duration::from_millis(config.scan_sync_timeout_ms),
+    );
+    let uuid = scanner.ensure_ready(&view_key, config.start_block).await?;
     let mut join_counts = JoinCounts::default();
 
     let families = [

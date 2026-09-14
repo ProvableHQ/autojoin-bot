@@ -65,6 +65,10 @@ environment variable to disable color explicitly.
 
 `run` executes one pass at a time and waits `CLI_INTERVAL_SECONDS` after each
 completed pass. A failed pass is reported and retried after that interval.
+Each pass derives the scanner UUID locally and checks `/status` first. An
+existing scan is allowed to reach `synced: true` without re-registration; a
+missing registration is renewed and then held behind the same synchronization
+barrier before records are fetched.
 `start` runs that loop in a detached session and sends output to the `.log`
 sidecar beside the configuration; `.pid` tracks the worker. `status` reports
 both the worker PID and its active log path and level. SIGINT and SIGTERM cancel
