@@ -57,9 +57,9 @@ export const JOIN_FAMILIES = Object.freeze({
         "aj_usdcx_stablecoin_15_16.aleo",
       ]),
       testnet: Object.freeze([
-        "test_aj_usdcx_stablecoin_2_10.aleo",
-        "test_aj_usdcx_stablecoin_11_14.aleo",
-        "test_aj_usdcx_stablecoin_15_16.aleo",
+        "aj_test_usdcx_stablecoin_2_10.aleo",
+        "aj_test_usdcx_stablecoin_11_14.aleo",
+        "aj_test_usdcx_stablecoin_15_16.aleo",
       ]),
     }),
   }),

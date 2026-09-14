@@ -69,7 +69,7 @@ remains delegated.
 USDCx uses `usdcx_stablecoin.aleo/Token` on mainnet and
 `test_usdcx_stablecoin.aleo/Token` on testnet. Mainnet joins use
 `aj_usdcx_stablecoin_{2_10,11_14,15_16}.aleo`; testnet joins use the matching
-`test_aj_usdcx_stablecoin_*` program ID. Each calls `join_N` for the selected
+`aj_test_usdcx_stablecoin_*` program ID. Each calls `join_N` for the selected
 batch size. The Rust authorization loader recursively fetches and registers
 the stablecoin program's import graph before signing the nested calls.
 

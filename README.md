@@ -20,7 +20,7 @@ iteratively.
 
 USDCx consolidation is also supported for `usdcx_stablecoin.aleo/Token`
 (mainnet) and `test_usdcx_stablecoin.aleo/Token` (testnet), using the
-network-specific `aj_usdcx_stablecoin_*` / `test_aj_usdcx_stablecoin_*`
+network-specific `aj_usdcx_stablecoin_*` / `aj_test_usdcx_stablecoin_*`
 program families.
 
 ARC20 consolidation is supported for `arc20_eth.aleo/Token`,
