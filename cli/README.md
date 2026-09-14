@@ -36,7 +36,15 @@ The wizard starts by selecting an operating mode:
 - `autojoin` requires a private key and at least one asset family. Its view key
   is derived in memory for scanner operations.
 - `scan-only` accepts either key type and defaults to the less-privileged view
-  key. It cannot enable autojoin families.
+  key. It cannot enable autojoin families. Its record scope can be `supported`
+  (the default), `all`, or a custom program/record pair.
+
+Autojoin mode derives scanner filters from the selected asset families; it
+does not ask for generic record filters. Scan-only `supported` mode scans all
+known family pairs: `credits.aleo/credits`, the network-specific USDCx
+stablecoin program with record `Token`, and the network-specific ETH, SOL, and
+WBTC ARC20 programs with record `Token`. Testnet program IDs receive their
+required `test_` prefixes automatically.
 
 Mainnet is the default network both in the wizard and when `ALEO_NETWORK` is
 omitted from a hand-written configuration.

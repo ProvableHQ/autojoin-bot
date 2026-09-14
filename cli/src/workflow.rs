@@ -43,19 +43,71 @@ async fn scan<N: Network>(
     view_key: &ViewKey<N>,
     uuid: &str,
 ) -> Result<ScanResult> {
-    let records = scanner
-        .fetch_unspent(
-            view_key,
-            uuid,
-            config.start_block,
-            config.record_program.as_deref(),
-            config.record_name.as_deref(),
-        )
-        .await?;
+    let families = scan_families(config);
+    let records = if families.is_empty() {
+        scanner
+            .fetch_unspent(
+                view_key,
+                uuid,
+                config.start_block,
+                config.record_program.as_deref(),
+                config.record_name.as_deref(),
+            )
+            .await?
+    } else {
+        let mut records = Vec::new();
+        for family in families {
+            let program = family
+                .record_program(config.network)
+                .context("record family is not configured for this network")?;
+            event(
+                LogLevel::Trace,
+                format_args!(
+                    "scanning family={} program={} record={}",
+                    family.name(),
+                    program,
+                    family.record_name()
+                ),
+            );
+            records.extend(
+                scanner
+                    .fetch_unspent(
+                        view_key,
+                        uuid,
+                        config.start_block,
+                        Some(program),
+                        Some(family.record_name()),
+                    )
+                    .await?,
+            );
+        }
+        records
+    };
     Ok(ScanResult {
         uuid: uuid.to_owned(),
         records,
     })
+}
+
+fn scan_families(config: &Config) -> Vec<RecordFamily> {
+    let enabled = [
+        (RecordFamily::Credits, config.autojoin_credits),
+        (RecordFamily::Usdcx, config.autojoin_usdcx),
+        (RecordFamily::Arc20Eth, config.autojoin_arc20_eth),
+        (RecordFamily::Arc20Sol, config.autojoin_arc20_sol),
+        (RecordFamily::Arc20Wbtc, config.autojoin_arc20_wbtc),
+    ];
+    let selected: Vec<_> = enabled
+        .iter()
+        .filter_map(|(family, enabled)| enabled.then_some(*family))
+        .collect();
+    if !selected.is_empty() {
+        selected
+    } else if config.scan_supported_records {
+        enabled.iter().map(|(family, _)| *family).collect()
+    } else {
+        Vec::new()
+    }
 }
 
 async fn run<N: Network, A: Aleo<Network = N>>(
@@ -290,4 +342,54 @@ pub async fn run_once(config: &Config) -> Result<RunSummary> {
         record_store: config.record_store_file.clone(),
         decrypted_record_store: config.decrypted_record_store_file.clone(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn supported_scan_selects_every_known_family() {
+        let values = BTreeMap::from([
+            (
+                "ALEO_VIEW_KEY_FILE".to_owned(),
+                "/secure/view.key".to_owned(),
+            ),
+            ("RECORD_STORE_FILE".to_owned(), "records.json".to_owned()),
+            ("SCAN_SUPPORTED_RECORDS".to_owned(), "true".to_owned()),
+        ]);
+        let families = scan_families(&Config::from_values(&values).unwrap());
+        assert_eq!(
+            families,
+            vec![
+                RecordFamily::Credits,
+                RecordFamily::Usdcx,
+                RecordFamily::Arc20Eth,
+                RecordFamily::Arc20Sol,
+                RecordFamily::Arc20Wbtc,
+            ]
+        );
+    }
+
+    #[test]
+    fn autojoin_scan_selects_only_enabled_families() {
+        let values = BTreeMap::from([
+            (
+                "ALEO_PRIVATE_KEY_FILE".to_owned(),
+                "/secure/private.key".to_owned(),
+            ),
+            ("RECORD_STORE_FILE".to_owned(), "records.json".to_owned()),
+            ("AUTOJOIN_CREDITS".to_owned(), "true".to_owned()),
+            ("AUTOJOIN_ARC20_WBTC".to_owned(), "true".to_owned()),
+            (
+                "DELEGATED_PROVING_URL".to_owned(),
+                "https://prover.example".to_owned(),
+            ),
+        ]);
+        assert_eq!(
+            scan_families(&Config::from_values(&values).unwrap()),
+            vec![RecordFamily::Credits, RecordFamily::Arc20Wbtc]
+        );
+    }
 }

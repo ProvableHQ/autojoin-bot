@@ -21,6 +21,7 @@ const CONFIG_KEYS: &[&str] = &[
     "SCAN_START_BLOCK",
     "SCAN_SYNC_POLL_INTERVAL_MS",
     "SCAN_SYNC_TIMEOUT_MS",
+    "SCAN_SUPPORTED_RECORDS",
     "RECORD_STORE_FILE",
     "RECORD_STORE_PRIVATE",
     "DECRYPTED_RECORD_STORE_FILE",
@@ -103,15 +104,6 @@ pub fn init(path: &Path, force: bool) -> Result<()> {
         values.insert("DECRYPTED_RECORD_STORE_FILE", decrypted_store);
     }
 
-    let record_program = prompt("Record program filter (blank for all)")?;
-    let record_name = prompt("Record name filter (blank for all)")?;
-    if !record_program.is_empty() {
-        values.insert("RECORD_PROGRAM", record_program);
-    }
-    if !record_name.is_empty() {
-        values.insert("RECORD_NAME", record_name);
-    }
-
     let mut any_autojoin = false;
     if mode == "autojoin" {
         loop {
@@ -145,6 +137,24 @@ pub fn init(path: &Path, force: bool) -> Result<()> {
         let token = prompt("Delegated proving token file (blank if not required)")?;
         if !token.is_empty() {
             values.insert("DELEGATED_PROVING_TOKEN_FILE", token);
+        }
+    }
+    if mode == "scan-only" {
+        let scope = prompt_choice(
+            "Records to scan",
+            &["supported", "all", "custom"],
+            "supported",
+        )?;
+        match scope.as_str() {
+            "supported" => {
+                values.insert("SCAN_SUPPORTED_RECORDS", "true".to_owned());
+            }
+            "custom" => {
+                values.insert("RECORD_PROGRAM", prompt_required("Record program")?);
+                values.insert("RECORD_NAME", prompt_required("Record name")?);
+            }
+            "all" => {}
+            _ => unreachable!("prompt_choice validates the scan scope"),
         }
     }
     values.insert(

@@ -23,6 +23,7 @@ pub struct Config {
     pub record_store_file: PathBuf,
     pub record_store_private: bool,
     pub scanner_root: String,
+    pub scan_supported_records: bool,
     pub scan_sync_poll_interval_ms: u64,
     pub scan_sync_timeout_ms: u64,
     pub start_block: u32,
@@ -81,6 +82,15 @@ impl Config {
         if let Some(url) = &delegated_proving_url {
             validate_prover_url(url)?;
         }
+        let scan_supported_records = parse_bool("SCAN_SUPPORTED_RECORDS", false)?;
+        if scan_supported_records && any_autojoin {
+            bail!("SCAN_SUPPORTED_RECORDS is for scan-only mode");
+        }
+        if scan_supported_records
+            && (optional("RECORD_PROGRAM").is_some() || optional("RECORD_NAME").is_some())
+        {
+            bail!("SCAN_SUPPORTED_RECORDS cannot be combined with custom record filters");
+        }
 
         Ok(Self {
             autojoin_credits,
@@ -101,6 +111,7 @@ impl Config {
             record_store_file,
             record_store_private: parse_bool("RECORD_STORE_PRIVATE", true)?,
             scanner_root: EDGE_SCANNER_ROOT.into(),
+            scan_supported_records,
             scan_sync_poll_interval_ms: positive_u64("SCAN_SYNC_POLL_INTERVAL_MS", 5_000)?,
             scan_sync_timeout_ms: positive_u64("SCAN_SYNC_TIMEOUT_MS", 300_000)?,
             start_block: optional("SCAN_START_BLOCK")
