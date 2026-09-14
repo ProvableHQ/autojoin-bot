@@ -11,7 +11,7 @@ use snarkvm_console::{
     prelude::{Network, ToBytes},
     program::{Ciphertext, Record},
 };
-use tokio::time::{sleep, timeout};
+use tokio::time::{Instant, sleep, timeout};
 
 use crate::{
     http::decode_response,
@@ -50,6 +50,13 @@ struct EncryptedRegistrationRequest {
     ciphertext: String,
 }
 
+#[derive(Debug, Default, Eq, PartialEq)]
+struct DecryptionSummary {
+    decrypted: usize,
+    failed: usize,
+    missing_ciphertext: usize,
+}
+
 impl ScannerClient {
     pub fn new(endpoint: String) -> Self {
         Self {
@@ -59,6 +66,10 @@ impl ScannerClient {
     }
 
     pub async fn register<N: Network>(&self, view_key: &ViewKey<N>, start: u32) -> Result<String> {
+        event(
+            LogLevel::Info,
+            format_args!("registering view key with record scanner start_block={start}"),
+        );
         let pubkey = self
             .client
             .get(format!("{}/pubkey", self.endpoint))
@@ -91,6 +102,10 @@ impl ScannerClient {
             .context("failed to register with scanner")?;
         let registration: RegistrationResponse =
             decode_response(response, "Scanner registration").await?;
+        event(
+            LogLevel::Info,
+            format_args!("record-scanner registration accepted start_block={start}"),
+        );
         Ok(registration.uuid)
     }
 
@@ -103,6 +118,16 @@ impl ScannerClient {
         poll_interval: Duration,
         sync_timeout: Duration,
     ) -> Result<()> {
+        event(
+            LogLevel::Info,
+            format_args!(
+                "waiting for initial record-scanner synchronization poll_interval_ms={} timeout_ms={}",
+                poll_interval.as_millis(),
+                sync_timeout.as_millis()
+            ),
+        );
+        let started = Instant::now();
+        let mut next_progress = started;
         timeout(sync_timeout, async {
             let mut re_registered = false;
             loop {
@@ -128,12 +153,25 @@ impl ScannerClient {
                 let status: SyncStatusResponse =
                     decode_response(response, "Record-scanner sync status").await?;
                 if status.synced {
+                    event(
+                        LogLevel::Info,
+                        format_args!(
+                            "record-scanner synchronization complete elapsed_seconds={}",
+                            started.elapsed().as_secs()
+                        ),
+                    );
                     return Ok(());
                 }
-                event(
-                    LogLevel::Trace,
-                    format_args!("scanner synchronization still pending"),
-                );
+                if Instant::now() >= next_progress {
+                    event(
+                        LogLevel::Info,
+                        format_args!(
+                            "record-scanner synchronization in progress elapsed_seconds={}",
+                            started.elapsed().as_secs()
+                        ),
+                    );
+                    next_progress = Instant::now() + Duration::from_secs(60);
+                }
                 sleep(poll_interval).await;
             }
         })
@@ -151,6 +189,14 @@ impl ScannerClient {
         program: Option<&str>,
         record_name: Option<&str>,
     ) -> Result<Vec<OwnedRecord>> {
+        event(
+            LogLevel::Info,
+            format_args!(
+                "record scan started program={} record={}",
+                program.unwrap_or("all"),
+                record_name.unwrap_or("all")
+            ),
+        );
         let mut records = Vec::new();
         let mut page = 0;
 
@@ -194,8 +240,41 @@ impl ScannerClient {
             page += 1;
         }
 
+        let scanner_records = records.len();
         let mut records = self.remove_spent_tags(records).await?;
-        decrypt_records(view_key, &mut records);
+        let spent_filtered = scanner_records.saturating_sub(records.len());
+        event(
+            LogLevel::Info,
+            format_args!(
+                "record decryption started program={} record={} unspent_records={}",
+                program.unwrap_or("all"),
+                record_name.unwrap_or("all"),
+                records.len()
+            ),
+        );
+        let decryption = decrypt_records(view_key, &mut records);
+        event(
+            LogLevel::Info,
+            format_args!(
+                "record decryption complete program={} record={} decrypted={} failed={} missing_ciphertext={}",
+                program.unwrap_or("all"),
+                record_name.unwrap_or("all"),
+                decryption.decrypted,
+                decryption.failed,
+                decryption.missing_ciphertext
+            ),
+        );
+        event(
+            LogLevel::Info,
+            format_args!(
+                "record scan complete program={} record={} scanner_records={} spent_filtered={} unspent_records={}",
+                program.unwrap_or("all"),
+                record_name.unwrap_or("all"),
+                scanner_records,
+                spent_filtered,
+                records.len()
+            ),
+        );
         Ok(records)
     }
 
@@ -237,18 +316,28 @@ impl ScannerClient {
     }
 }
 
-fn decrypt_records<N: Network>(view_key: &ViewKey<N>, records: &mut [OwnedRecord]) {
+fn decrypt_records<N: Network>(
+    view_key: &ViewKey<N>,
+    records: &mut [OwnedRecord],
+) -> DecryptionSummary {
+    let mut summary = DecryptionSummary::default();
     for record in records {
         let Some(ciphertext) = record.record_ciphertext.as_deref() else {
+            summary.missing_ciphertext += 1;
             continue;
         };
         let Ok(ciphertext) = ciphertext.parse::<Record<N, Ciphertext<N>>>() else {
+            summary.failed += 1;
             continue;
         };
         if let Ok(plaintext) = ciphertext.decrypt(view_key) {
             record.record_plaintext = Some(plaintext.to_string());
+            summary.decrypted += 1;
+        } else {
+            summary.failed += 1;
         }
     }
+    summary
 }
 
 fn owned_body(uuid: &str, program: Option<&str>, record_name: Option<&str>, page: usize) -> Value {

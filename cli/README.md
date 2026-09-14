@@ -43,11 +43,21 @@ Autojoin mode derives scanner filters from the selected asset families; it
 does not ask for generic record filters. Scan-only `supported` mode scans all
 known family pairs: `credits.aleo/credits`, the network-specific USDCx
 stablecoin program with record `Token`, and the network-specific ETH, SOL, and
-WBTC ARC20 programs with record `Token`. Testnet program IDs receive their
+wBTC ARC20 programs with record `Token`. Testnet program IDs receive their
 required `test_` prefixes automatically.
 
 Mainnet is the default network both in the wizard and when `ALEO_NETWORK` is
 omitted from a hand-written configuration.
+
+Autojoin always uses the free, unauthenticated Edge delegated-proving service.
+The network-specific base URL is selected automatically:
+
+- `https://edge.provable.com/api/prove/mainnet`
+- `https://edge.provable.com/api/prove/testnet`
+
+The CLI retrieves the one-time encryption key from `{base}/pubkey` and submits
+the encrypted proving request to `{base}/prove`. The wizard does not request a
+proving URL, API key, or bearer-token file.
 
 Interactive prompts and lifecycle status use terminal-aware color. ANSI escape
 sequences are omitted when output is redirected. Set the standard `NO_COLOR`
@@ -56,8 +66,9 @@ environment variable to disable color explicitly.
 `run` executes one pass at a time and waits `CLI_INTERVAL_SECONDS` after each
 completed pass. A failed pass is reported and retried after that interval.
 `start` runs that loop in a detached session and sends output to the `.log`
-sidecar beside the configuration; `.pid` tracks the worker. SIGINT and SIGTERM
-cancel an in-progress pass and shut the worker down cleanly.
+sidecar beside the configuration; `.pid` tracks the worker. `status` reports
+both the worker PID and its active log path and level. SIGINT and SIGTERM cancel
+an in-progress pass and shut the worker down cleanly.
 
 ## Logging
 
@@ -70,10 +81,13 @@ configuration settings are:
   sidecar beside the configuration.
 
 The tiers are cumulative: `error` reports failed passes; `warn` adds scanner
-registration recovery; `info` adds lifecycle and pass summaries; `debug` adds
-scanner registration and join-batch progress; and `trace` adds synchronization,
-pagination, and tag-check polling. `off` disables operational events. The
-one-shot JSON result from `once` remains on stdout independently of log level.
+registration recovery; and `info` reports pass lifecycle, view-key registration,
+scanner synchronization, record scans, spent filtering, decryption counts,
+unspent counts, consolidation batches, delegated-proving acceptance, scanner
+observation, and record-store updates. `debug` and `trace` add lower-level
+diagnostics such as pagination and tag-check polling. `off` disables operational
+events. The one-shot JSON result from `once` remains on stdout independently of
+log level.
 
 Log files are created or corrected to mode `0600`. Events never include key or
 token contents, decrypted records, ciphertexts, record tags, or scanner UUIDs.

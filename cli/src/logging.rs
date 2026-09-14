@@ -33,6 +33,12 @@ impl LogLevel {
     }
 }
 
+impl fmt::Display for LogLevel {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.label().to_ascii_lowercase())
+    }
+}
+
 impl FromStr for LogLevel {
     type Err = anyhow::Error;
 

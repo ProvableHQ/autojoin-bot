@@ -44,6 +44,17 @@ async fn scan<N: Network>(
     uuid: &str,
 ) -> Result<ScanResult> {
     let families = scan_families(config);
+    event(
+        LogLevel::Info,
+        format_args!(
+            "final unspent-record scan started scope={}",
+            if families.is_empty() {
+                "configured-filter"
+            } else {
+                "enabled-families"
+            }
+        ),
+    );
     let records = if families.is_empty() {
         scanner
             .fetch_unspent(
@@ -61,9 +72,9 @@ async fn scan<N: Network>(
                 .record_program(config.network)
                 .context("record family is not configured for this network")?;
             event(
-                LogLevel::Trace,
+                LogLevel::Info,
                 format_args!(
-                    "scanning family={} program={} record={}",
+                    "scanning record family={} program={} record={}",
                     family.name(),
                     program,
                     family.record_name()
@@ -83,6 +94,13 @@ async fn scan<N: Network>(
         }
         records
     };
+    event(
+        LogLevel::Info,
+        format_args!(
+            "final unspent-record scan complete records={}",
+            records.len()
+        ),
+    );
     Ok(ScanResult {
         uuid: uuid.to_owned(),
         records,
@@ -134,14 +152,6 @@ async fn run<N: Network, A: Aleo<Network = N>>(
             .map_err(|error| anyhow::anyhow!("failed to derive view key: {error}"))?,
     };
     let scanner = ScannerClient::new(config.endpoint());
-    event(
-        LogLevel::Debug,
-        format_args!(
-            "registering scanner network={} start_block={}",
-            config.network.as_str(),
-            config.start_block
-        ),
-    );
     let uuid = scanner.register(&view_key, config.start_block).await?;
     scanner
         .wait_for_sync(
@@ -152,10 +162,6 @@ async fn run<N: Network, A: Aleo<Network = N>>(
             Duration::from_millis(config.scan_sync_timeout_ms),
         )
         .await?;
-    event(
-        LogLevel::Debug,
-        format_args!("scanner synchronization complete"),
-    );
     let mut join_counts = JoinCounts::default();
 
     let families = [
@@ -166,23 +172,25 @@ async fn run<N: Network, A: Aleo<Network = N>>(
         (RecordFamily::Arc20Wbtc, config.autojoin_arc20_wbtc),
     ];
     if families.iter().any(|(_, enabled)| *enabled) {
-        let token = config
-            .delegated_proving_token_file
-            .as_deref()
-            .map(read_secure_key_file)
-            .transpose()?
-            .map(|token| zeroize::Zeroizing::new(token.trim().to_owned()));
-        let prover = DelegatedProverClient::new(
-            config
-                .delegated_proving_url
-                .clone()
-                .expect("validated configuration"),
-            token,
+        event(
+            LogLevel::Info,
+            format_args!(
+                "record consolidation enabled families={}",
+                families.iter().filter(|(_, enabled)| *enabled).count()
+            ),
         );
+        let prover = DelegatedProverClient::new(config.delegated_proving_url.clone());
         for (family, enabled) in families {
             if !enabled {
                 continue;
             }
+            event(
+                LogLevel::Info,
+                format_args!(
+                    "record consolidation evaluation started family={}",
+                    family.name()
+                ),
+            );
             let joins = consolidate_family::<N, A>(
                 config,
                 &scanner,
@@ -200,7 +208,19 @@ async fn run<N: Network, A: Aleo<Network = N>>(
                 RecordFamily::Arc20Sol => join_counts.arc20_sol = joins,
                 RecordFamily::Arc20Wbtc => join_counts.arc20_wbtc = joins,
             }
+            event(
+                LogLevel::Info,
+                format_args!(
+                    "record consolidation evaluation complete family={} joins={joins}",
+                    family.name()
+                ),
+            );
         }
+    } else {
+        event(
+            LogLevel::Info,
+            format_args!("scan-only pass; record consolidation is disabled"),
+        );
     }
 
     Ok((scan(config, &scanner, &view_key, &uuid).await?, join_counts))
@@ -232,14 +252,22 @@ async fn consolidate_family<N: Network, A: Aleo<Network = N>>(
             .await?;
         let available = records_for_family(&records, family, config.network)?;
         event(
-            LogLevel::Trace,
+            LogLevel::Info,
             format_args!(
-                "family={} available_records={}",
+                "unspent records available family={} count={}",
                 family.name(),
                 available.len()
             ),
         );
         if available.len() <= 1 {
+            event(
+                LogLevel::Info,
+                format_args!(
+                    "no consolidation needed family={} unspent_records={}",
+                    family.name(),
+                    available.len()
+                ),
+            );
             return Ok(joins);
         }
         let count = available.len().min(family.max_batch());
@@ -253,15 +281,36 @@ async fn consolidate_family<N: Network, A: Aleo<Network = N>>(
             .filter_map(|record| record.tag.clone())
             .collect();
         event(
-            LogLevel::Debug,
-            format_args!("submitting family={} batch_size={count}", family.name()),
+            LogLevel::Info,
+            format_args!(
+                "submitting delegated-proving consolidation family={} join={} batch_size={} unspent_before={} expected_after={}",
+                family.name(),
+                joins + 1,
+                count,
+                available.len(),
+                available.len() - count + 1
+            ),
         );
         prover
             .prove_and_broadcast::<N, A>(private_key, config.network, family, selected)
             .await?;
         joins += 1;
+        event(
+            LogLevel::Info,
+            format_args!(
+                "delegated-proving consolidation broadcast accepted family={} join={joins}",
+                family.name()
+            ),
+        );
 
         let deadline = Instant::now() + Duration::from_millis(config.autojoin_timeout_ms);
+        event(
+            LogLevel::Info,
+            format_args!(
+                "waiting for record scanner to observe consolidation family={} join={joins}",
+                family.name()
+            ),
+        );
         loop {
             let current = scanner
                 .fetch_unspent(
@@ -287,8 +336,13 @@ async fn consolidate_family<N: Network, A: Aleo<Network = N>>(
             });
             if inputs_gone && replacement_seen {
                 event(
-                    LogLevel::Trace,
-                    format_args!("family={} replacement observed", family.name()),
+                    LogLevel::Info,
+                    format_args!(
+                        "record scanner observed consolidation family={} join={} unspent_records={}",
+                        family.name(),
+                        joins,
+                        current_records.len()
+                    ),
                 );
                 break;
             }
@@ -304,6 +358,14 @@ async fn consolidate_family<N: Network, A: Aleo<Network = N>>(
 }
 
 pub async fn run_once(config: &Config) -> Result<RunSummary> {
+    event(
+        LogLevel::Info,
+        format_args!(
+            "pass started network={} start_block={}",
+            config.network.as_str(),
+            config.start_block
+        ),
+    );
     let (result, join_counts) = match config.network {
         AleoNetwork::Mainnet => run::<MainnetV0, AleoV0>(config).await?,
         AleoNetwork::Testnet => run::<TestnetV0, AleoTestnetV0>(config).await?,
@@ -318,6 +380,14 @@ pub async fn run_once(config: &Config) -> Result<RunSummary> {
             include_plaintext: false,
         },
     )?;
+    event(
+        LogLevel::Info,
+        format_args!(
+            "ciphertext record store updated path={} records={}",
+            config.record_store_file.display(),
+            result.records.len()
+        ),
+    );
     if let Some(path) = &config.decrypted_record_store_file {
         write_record_store(
             path,
@@ -329,6 +399,19 @@ pub async fn run_once(config: &Config) -> Result<RunSummary> {
                 include_plaintext: true,
             },
         )?;
+        event(
+            LogLevel::Info,
+            format_args!(
+                "decrypted record store updated path={} records={}",
+                path.display(),
+                result.records.len()
+            ),
+        );
+    } else {
+        event(
+            LogLevel::Info,
+            format_args!("decrypted record store disabled"),
+        );
     }
     Ok(RunSummary {
         network: config.network.as_str(),
@@ -382,10 +465,6 @@ mod tests {
             ("RECORD_STORE_FILE".to_owned(), "records.json".to_owned()),
             ("AUTOJOIN_CREDITS".to_owned(), "true".to_owned()),
             ("AUTOJOIN_ARC20_WBTC".to_owned(), "true".to_owned()),
-            (
-                "DELEGATED_PROVING_URL".to_owned(),
-                "https://prover.example".to_owned(),
-            ),
         ]);
         assert_eq!(
             scan_families(&Config::from_values(&values).unwrap()),

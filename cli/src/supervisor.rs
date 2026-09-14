@@ -34,6 +34,12 @@ impl Drop for PidGuard {
 
 pub async fn once(config_path: &Path) -> Result<()> {
     let runtime = config_file::load(config_path)?;
+    if let Some(path) = &runtime.log_file {
+        eprintln!(
+            "{}",
+            ui::muted(&format!("Operational log: {}", path.display()))
+        );
+    }
     logging::init(runtime.log_level, runtime.log_file.as_deref())?;
     let _guard = claim_pid(&sidecar(config_path, "pid"))?;
     event(LogLevel::Debug, format_args!("starting one-time pass"));
@@ -60,6 +66,13 @@ pub async fn run(config_path: &Path, foreground: bool) -> Result<()> {
             ui::success("Continuous worker started."),
             ui::muted("Press Ctrl-C to stop.")
         );
+        match log_file {
+            Some(path) => println!(
+                "{}",
+                ui::muted(&format!("Operational log: {}", path.display()))
+            ),
+            None => println!("{}", ui::muted("Operational log: stderr")),
+        }
     }
     event(
         LogLevel::Info,
@@ -199,8 +212,20 @@ pub async fn stop(config: &Path) -> Result<()> {
 }
 
 pub fn status(config: &Path) -> Result<()> {
+    let runtime = config_file::load(config)?;
+    let log_path = runtime.log_file.unwrap_or_else(|| sidecar(config, "log"));
     match live_pid(&sidecar(config, "pid"))? {
-        Some(pid) => println!("{}", ui::success(&format!("running (PID {pid})"))),
+        Some(pid) => {
+            println!("{}", ui::success(&format!("running (PID {pid})")));
+            println!(
+                "{}",
+                ui::muted(&format!(
+                    "Log: {} (level: {})",
+                    log_path.display(),
+                    runtime.log_level
+                ))
+            );
+        }
         None => println!("{}", ui::muted("stopped")),
     }
     Ok(())

@@ -3,6 +3,7 @@ use std::str::FromStr;
 use anyhow::{Result, bail};
 
 pub const EDGE_SCANNER_ROOT: &str = "https://edge.provable.com/api/scanner";
+pub const EDGE_PROVER_ROOT: &str = "https://edge.provable.com/api/prove";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AleoNetwork {
@@ -16,6 +17,10 @@ impl AleoNetwork {
             Self::Mainnet => "mainnet",
             Self::Testnet => "testnet",
         }
+    }
+
+    pub fn prover_endpoint(self) -> String {
+        format!("{EDGE_PROVER_ROOT}/{}", self.as_str())
     }
 }
 
@@ -46,5 +51,9 @@ mod tests {
             AleoNetwork::Testnet
         );
         assert!("devnet".parse::<AleoNetwork>().is_err());
+        assert_eq!(
+            AleoNetwork::Mainnet.prover_endpoint(),
+            "https://edge.provable.com/api/prove/mainnet"
+        );
     }
 }

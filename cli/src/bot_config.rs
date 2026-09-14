@@ -13,8 +13,7 @@ pub struct Config {
     pub autojoin_arc20_wbtc: bool,
     pub autojoin_poll_interval_ms: u64,
     pub autojoin_timeout_ms: u64,
-    pub delegated_proving_token_file: Option<PathBuf>,
-    pub delegated_proving_url: Option<String>,
+    pub delegated_proving_url: String,
     pub key_source: KeySource,
     pub network: AleoNetwork,
     pub decrypted_record_store_file: Option<PathBuf>,
@@ -68,20 +67,13 @@ impl Config {
         let autojoin_arc20_wbtc = parse_bool("AUTOJOIN_ARC20_WBTC", false)?;
         let any_arc20 = autojoin_arc20_eth || autojoin_arc20_sol || autojoin_arc20_wbtc;
         let any_autojoin = autojoin_credits || autojoin_usdcx || any_arc20;
-        let network = optional("ALEO_NETWORK")
+        let network: AleoNetwork = optional("ALEO_NETWORK")
             .unwrap_or_else(|| "mainnet".into())
             .parse()?;
         if any_autojoin && !matches!(key_source, KeySource::PrivateKey(_)) {
             bail!("autojoin requires ALEO_PRIVATE_KEY_FILE to sign authorizations");
         }
-        let delegated_proving_url =
-            optional("DELEGATED_PROVING_URL").map(|url| url.trim_end_matches('/').to_string());
-        if any_autojoin && delegated_proving_url.is_none() {
-            bail!("autojoin requires DELEGATED_PROVING_URL");
-        }
-        if let Some(url) = &delegated_proving_url {
-            validate_prover_url(url)?;
-        }
+        let delegated_proving_url = network.prover_endpoint();
         let scan_supported_records = parse_bool("SCAN_SUPPORTED_RECORDS", false)?;
         if scan_supported_records && any_autojoin {
             bail!("SCAN_SUPPORTED_RECORDS is for scan-only mode");
@@ -100,8 +92,6 @@ impl Config {
             autojoin_arc20_wbtc,
             autojoin_poll_interval_ms: positive_u64("AUTOJOIN_POLL_INTERVAL_MS", 5_000)?,
             autojoin_timeout_ms: positive_u64("AUTOJOIN_TIMEOUT_MS", 300_000)?,
-            delegated_proving_token_file: optional("DELEGATED_PROVING_TOKEN_FILE")
-                .map(PathBuf::from),
             delegated_proving_url,
             key_source,
             network,
@@ -154,15 +144,6 @@ fn positive_u64_value(name: &str, value: Option<String>, default: u64) -> Result
     }
 }
 
-fn validate_prover_url(url: &str) -> Result<()> {
-    let parsed = reqwest::Url::parse(url).context("DELEGATED_PROVING_URL must be valid")?;
-    let local = matches!(parsed.host_str(), Some("localhost" | "127.0.0.1"));
-    if parsed.scheme() != "https" && !(local && parsed.scheme() == "http") {
-        bail!("DELEGATED_PROVING_URL must use HTTPS (HTTP is allowed only for localhost)");
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -179,6 +160,10 @@ mod tests {
         assert_eq!(
             Config::from_values(&values).unwrap().network,
             AleoNetwork::Mainnet
+        );
+        assert_eq!(
+            Config::from_values(&values).unwrap().delegated_proving_url,
+            "https://edge.provable.com/api/prove/mainnet"
         );
     }
 }

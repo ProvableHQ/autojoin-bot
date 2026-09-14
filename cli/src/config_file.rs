@@ -32,6 +32,7 @@ const CONFIG_KEYS: &[&str] = &[
     "AUTOJOIN_ARC20_ETH",
     "AUTOJOIN_ARC20_SOL",
     "AUTOJOIN_ARC20_WBTC",
+    // Accepted only so configs created by earlier CLI builds continue to load.
     "DELEGATED_PROVING_URL",
     "DELEGATED_PROVING_TOKEN_FILE",
     "AUTOJOIN_POLL_INTERVAL_MS",
@@ -104,17 +105,16 @@ pub fn init(path: &Path, force: bool) -> Result<()> {
         values.insert("DECRYPTED_RECORD_STORE_FILE", decrypted_store);
     }
 
-    let mut any_autojoin = false;
     if mode == "autojoin" {
         loop {
-            any_autojoin = false;
+            let mut any_autojoin = false;
             println!("\n{}", ui::heading("Assets to consolidate"));
             for (label, name) in [
                 ("ALEO credits", "AUTOJOIN_CREDITS"),
                 ("USDCx", "AUTOJOIN_USDCX"),
                 ("ARC20 ETH", "AUTOJOIN_ARC20_ETH"),
                 ("ARC20 SOL", "AUTOJOIN_ARC20_SOL"),
-                ("ARC20 WBTC", "AUTOJOIN_ARC20_WBTC"),
+                ("ARC20 wBTC", "AUTOJOIN_ARC20_WBTC"),
             ] {
                 let enabled = prompt_bool(&format!("Enable {label} autojoin"), false)?;
                 values.insert(name, enabled.to_string());
@@ -127,16 +127,6 @@ pub fn init(path: &Path, force: bool) -> Result<()> {
                 "{}",
                 ui::warning("Select at least one asset for autojoin mode.")
             );
-        }
-    }
-    if any_autojoin {
-        values.insert(
-            "DELEGATED_PROVING_URL",
-            prompt_required("Delegated proving URL")?,
-        );
-        let token = prompt("Delegated proving token file (blank if not required)")?;
-        if !token.is_empty() {
-            values.insert("DELEGATED_PROVING_TOKEN_FILE", token);
         }
     }
     if mode == "scan-only" {
@@ -223,6 +213,8 @@ pub fn load(path: &Path) -> Result<RuntimeConfig> {
         values.insert(name.to_owned(), value.to_owned());
     }
     let mode = values.remove("CLI_MODE");
+    values.remove("DELEGATED_PROVING_URL");
+    values.remove("DELEGATED_PROVING_TOKEN_FILE");
     let any_autojoin = [
         "AUTOJOIN_CREDITS",
         "AUTOJOIN_USDCX",
