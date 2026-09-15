@@ -13,14 +13,13 @@ pub struct Config {
     pub autojoin_arc20_wbtc: bool,
     pub autojoin_poll_interval_ms: u64,
     pub autojoin_timeout_ms: u64,
-    pub delegated_proving_token_file: Option<PathBuf>,
-    pub delegated_proving_url: Option<String>,
+    pub delegated_proving_url: String,
     pub key_source: KeySource,
     pub network: AleoNetwork,
     pub decrypted_record_store_file: Option<PathBuf>,
     pub record_name: Option<String>,
     pub record_program: Option<String>,
-    pub record_store_file: PathBuf,
+    pub record_store_file: Option<PathBuf>,
     pub record_store_private: bool,
     pub scanner_root: String,
     pub scan_sync_poll_interval_ms: u64,
@@ -43,12 +42,11 @@ impl Config {
             (None, Some(path)) => KeySource::PrivateKey(path),
             _ => bail!("exactly one of ALEO_VIEW_KEY_FILE or ALEO_PRIVATE_KEY_FILE is required"),
         };
-        let record_store_file = optional_env("RECORD_STORE_FILE")
-            .map(PathBuf::from)
-            .context("RECORD_STORE_FILE is required")?;
+        let record_store_file = optional_env("RECORD_STORE_FILE").map(PathBuf::from);
         let decrypted_record_store_file =
             optional_env("DECRYPTED_RECORD_STORE_FILE").map(PathBuf::from);
-        if decrypted_record_store_file.as_ref() == Some(&record_store_file) {
+        if decrypted_record_store_file.is_some() && decrypted_record_store_file == record_store_file
+        {
             bail!("DECRYPTED_RECORD_STORE_FILE must differ from RECORD_STORE_FILE");
         }
 
@@ -59,20 +57,13 @@ impl Config {
         let autojoin_arc20_wbtc = parse_bool_env("AUTOJOIN_ARC20_WBTC", false)?;
         let any_arc20 = autojoin_arc20_eth || autojoin_arc20_sol || autojoin_arc20_wbtc;
         let any_autojoin = autojoin_credits || autojoin_usdcx || any_arc20;
-        let network = env::var("ALEO_NETWORK")
+        let network: AleoNetwork = env::var("ALEO_NETWORK")
             .unwrap_or_else(|_| "testnet".into())
             .parse()?;
         if any_autojoin && !matches!(key_source, KeySource::PrivateKey(_)) {
             bail!("autojoin requires ALEO_PRIVATE_KEY_FILE to sign authorizations");
         }
-        let delegated_proving_url =
-            optional_env("DELEGATED_PROVING_URL").map(|url| url.trim_end_matches('/').to_string());
-        if any_autojoin && delegated_proving_url.is_none() {
-            bail!("autojoin requires DELEGATED_PROVING_URL");
-        }
-        if let Some(url) = &delegated_proving_url {
-            validate_prover_url(url)?;
-        }
+        let delegated_proving_url = network.prover_endpoint();
 
         Ok(Self {
             autojoin_credits,
@@ -82,8 +73,6 @@ impl Config {
             autojoin_arc20_wbtc,
             autojoin_poll_interval_ms: positive_u64_env("AUTOJOIN_POLL_INTERVAL_MS", 5_000)?,
             autojoin_timeout_ms: positive_u64_env("AUTOJOIN_TIMEOUT_MS", 300_000)?,
-            delegated_proving_token_file: optional_env("DELEGATED_PROVING_TOKEN_FILE")
-                .map(PathBuf::from),
             delegated_proving_url,
             key_source,
             network,
@@ -137,13 +126,4 @@ fn positive_u64_env(name: &str, default: u64) -> Result<u64> {
             Ok(parsed)
         }
     }
-}
-
-fn validate_prover_url(url: &str) -> Result<()> {
-    let parsed = reqwest::Url::parse(url).context("DELEGATED_PROVING_URL must be valid")?;
-    let local = matches!(parsed.host_str(), Some("localhost" | "127.0.0.1"));
-    if parsed.scheme() != "https" && !(local && parsed.scheme() == "http") {
-        bail!("DELEGATED_PROVING_URL must use HTTPS (HTTP is allowed only for localhost)");
-    }
-    Ok(())
 }

@@ -16,11 +16,27 @@ test("loads Edge scanner configuration for either network", () => {
 
   assert.equal(config.network, "mainnet");
   assert.equal(config.scannerUrl, "https://edge.provable.com/api/scanner");
+  assert.equal(config.delegatedProvingUrl, "https://edge.provable.com/api/prove/mainnet");
   assert.equal(config.startBlock, 42);
   assert.equal(config.keyKind, "view");
   assert.equal(config.recordStorePrivate, true);
   assert.equal(config.scanSyncPollIntervalMs, 5_000);
   assert.equal(config.scanSyncTimeoutMs, 300_000);
+});
+
+test("record snapshots are optional by default", () => {
+  const config = loadConfig({ ALEO_VIEW_KEY_FILE: "/secure/account.viewkey" });
+  assert.equal(config.recordStoreFile, undefined);
+  assert.equal(config.decryptedRecordStoreFile, undefined);
+});
+
+test("decrypted snapshots can be enabled without a ciphertext snapshot", () => {
+  const config = loadConfig({
+    ALEO_VIEW_KEY_FILE: "/secure/account.viewkey",
+    DECRYPTED_RECORD_STORE_FILE: "/secure/decrypted-records.json",
+  });
+  assert.equal(config.recordStoreFile, undefined);
+  assert.equal(config.decryptedRecordStoreFile, "/secure/decrypted-records.json");
 });
 
 test("configures startup sync timing independently of join polling", () => {
@@ -104,7 +120,7 @@ test("accepts exactly one secure key-file source", () => {
   }), /exactly one/);
 });
 
-test("autojoin requires a private key and delegated prover URL", () => {
+test("autojoin requires a private key and uses unauthenticated Edge proving", () => {
   const common = {
     RECORD_STORE_FILE: "/secure/records.json",
     AUTOJOIN_CREDITS: "true",
@@ -112,25 +128,21 @@ test("autojoin requires a private key and delegated prover URL", () => {
   assert.throws(() => loadConfig({
     ...common,
     ALEO_VIEW_KEY_FILE: "/secure/view",
-    DELEGATED_PROVING_URL: "https://prover.example",
   }), /requires ALEO_PRIVATE_KEY_FILE/);
-  assert.throws(() => loadConfig({
-    ...common,
-    ALEO_PRIVATE_KEY_FILE: "/secure/private",
-  }), /requires DELEGATED_PROVING_URL/);
   const config = loadConfig({
     ...common,
     ALEO_PRIVATE_KEY_FILE: "/secure/private",
-    DELEGATED_PROVING_URL: "https://prover.example/",
+    DELEGATED_PROVING_URL: "https://ignored.example",
+    DELEGATED_PROVING_TOKEN_FILE: "/ignored/token",
   });
-  assert.equal(config.delegatedProvingUrl, "https://prover.example");
+  assert.equal(config.delegatedProvingUrl, "https://edge.provable.com/api/prove/testnet");
+  assert.equal(config.delegatedProvingTokenFile, undefined);
 
   const usdcx = loadConfig({
     ...common,
     AUTOJOIN_CREDITS: "false",
     AUTOJOIN_USDCX: "true",
     ALEO_PRIVATE_KEY_FILE: "/secure/private",
-    DELEGATED_PROVING_URL: "https://prover.example",
   });
   assert.equal(usdcx.autojoinUsdcx, true);
 
@@ -140,7 +152,6 @@ test("autojoin requires a private key and delegated prover URL", () => {
     AUTOJOIN_ARC20_ETH: "true",
     ALEO_NETWORK: "testnet",
     ALEO_PRIVATE_KEY_FILE: "/secure/private",
-    DELEGATED_PROVING_URL: "https://prover.example",
   });
   assert.equal(arc20.autojoinArc20Eth, true);
 });

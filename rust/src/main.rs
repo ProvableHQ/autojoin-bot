@@ -64,17 +64,12 @@ async fn run<N: Network, A: Aleo<Network = N>>(
         KeySource::PrivateKey(_) => ViewKey::try_from(private_key.as_ref().expect("parsed above"))
             .map_err(|error| anyhow::anyhow!("failed to derive view key: {error}"))?,
     };
-    let scanner = ScannerClient::new(config.endpoint());
-    let uuid = scanner.register(&view_key, config.start_block).await?;
-    scanner
-        .wait_for_sync(
-            &view_key,
-            &uuid,
-            config.start_block,
-            Duration::from_millis(config.scan_sync_poll_interval_ms),
-            Duration::from_millis(config.scan_sync_timeout_ms),
-        )
-        .await?;
+    let scanner = ScannerClient::new(
+        config.endpoint(),
+        Duration::from_millis(config.scan_sync_poll_interval_ms),
+        Duration::from_millis(config.scan_sync_timeout_ms),
+    );
+    let uuid = scanner.ensure_ready(&view_key, config.start_block).await?;
     let mut join_counts = JoinCounts::default();
 
     let families = [
@@ -85,19 +80,7 @@ async fn run<N: Network, A: Aleo<Network = N>>(
         (RecordFamily::Arc20Wbtc, config.autojoin_arc20_wbtc),
     ];
     if families.iter().any(|(_, enabled)| *enabled) {
-        let token = config
-            .delegated_proving_token_file
-            .as_deref()
-            .map(read_secure_key_file)
-            .transpose()?
-            .map(|token| zeroize::Zeroizing::new(token.trim().to_owned()));
-        let prover = DelegatedProverClient::new(
-            config
-                .delegated_proving_url
-                .clone()
-                .expect("validated configuration"),
-            token,
-        );
+        let prover = DelegatedProverClient::new(config.delegated_proving_url.clone());
         for (family, enabled) in families {
             if !enabled {
                 continue;
@@ -213,16 +196,18 @@ async fn main() -> Result<()> {
         AleoNetwork::Mainnet => run::<MainnetV0, AleoV0>(&config).await?,
         AleoNetwork::Testnet => run::<TestnetV0, AleoTestnetV0>(&config).await?,
     };
-    write_record_store(
-        &config.record_store_file,
-        config.network,
-        &result.uuid,
-        &result.records,
-        RecordStoreOptions {
-            secure: config.record_store_private,
-            include_plaintext: false,
-        },
-    )?;
+    if let Some(path) = &config.record_store_file {
+        write_record_store(
+            path,
+            config.network,
+            &result.uuid,
+            &result.records,
+            RecordStoreOptions {
+                secure: config.record_store_private,
+                include_plaintext: false,
+            },
+        )?;
+    }
     if let Some(path) = &config.decrypted_record_store_file {
         write_record_store(
             path,

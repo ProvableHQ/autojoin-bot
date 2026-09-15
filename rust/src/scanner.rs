@@ -7,8 +7,8 @@ use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use snarkvm_console::{
-    account::ViewKey,
-    prelude::{Network, ToBytes},
+    account::{Field, ViewKey},
+    prelude::{Network, One, ToBytes, ToField},
     program::{Ciphertext, Record},
 };
 use tokio::time::{sleep, timeout};
@@ -17,11 +17,14 @@ use crate::{http::decode_response, records::OwnedRecord};
 
 const PAGE_SIZE: usize = 1000;
 const TAG_BATCH_SIZE: usize = 1000;
+const SCANNER_DOMAIN: &str = "RecordScannerV0";
 
 #[derive(Clone)]
 pub struct ScannerClient {
     client: Client,
     endpoint: String,
+    sync_poll_interval: Duration,
+    sync_timeout: Duration,
 }
 
 #[derive(Debug, Deserialize)]
@@ -40,6 +43,13 @@ struct SyncStatusResponse {
     synced: bool,
 }
 
+#[derive(Debug, Eq, PartialEq)]
+enum RegistrationState {
+    Missing,
+    Syncing,
+    Synced,
+}
+
 #[derive(Debug, Serialize)]
 struct EncryptedRegistrationRequest {
     key_id: String,
@@ -47,10 +57,12 @@ struct EncryptedRegistrationRequest {
 }
 
 impl ScannerClient {
-    pub fn new(endpoint: String) -> Self {
+    pub fn new(endpoint: String, sync_poll_interval: Duration, sync_timeout: Duration) -> Self {
         Self {
             client: Client::new(),
             endpoint,
+            sync_poll_interval,
+            sync_timeout,
         }
     }
 
@@ -90,16 +102,70 @@ impl ScannerClient {
         Ok(registration.uuid)
     }
 
-    /// Wait for the initial historical scan before treating a small record set as complete.
+    /// Reuse an active scanner registration whenever possible. The UUID is
+    /// deterministic, so status can be checked without sending the view key
+    /// again. Only a missing registration is created or renewed.
+    pub async fn ensure_ready<N: Network>(
+        &self,
+        view_key: &ViewKey<N>,
+        start_block: u32,
+    ) -> Result<String> {
+        let uuid = scanner_uuid(view_key)?;
+        match self.registration_state(&uuid).await? {
+            RegistrationState::Synced => {}
+            RegistrationState::Syncing => {
+                self.wait_for_sync(view_key, &uuid, start_block).await?;
+            }
+            RegistrationState::Missing => {
+                self.renew_registration(view_key, &uuid, start_block)
+                    .await?;
+                self.wait_for_sync(view_key, &uuid, start_block).await?;
+            }
+        }
+        Ok(uuid)
+    }
+
+    async fn registration_state(&self, uuid: &str) -> Result<RegistrationState> {
+        let response = self
+            .client
+            .post(format!("{}/status", self.endpoint))
+            .json(uuid)
+            .send()
+            .await
+            .context("failed to check scanner registration status")?;
+        if response.status() == StatusCode::UNPROCESSABLE_ENTITY {
+            return Ok(RegistrationState::Missing);
+        }
+        let status: SyncStatusResponse =
+            decode_response(response, "Record-scanner registration status").await?;
+        Ok(if status.synced {
+            RegistrationState::Synced
+        } else {
+            RegistrationState::Syncing
+        })
+    }
+
+    async fn renew_registration<N: Network>(
+        &self,
+        view_key: &ViewKey<N>,
+        uuid: &str,
+        start_block: u32,
+    ) -> Result<()> {
+        let renewed_uuid = self.register(view_key, start_block).await?;
+        if renewed_uuid != uuid {
+            anyhow::bail!("record scanner returned a different UUID after re-registration");
+        }
+        Ok(())
+    }
+
+    /// Wait for the historical scan before treating a small record set as complete.
     pub async fn wait_for_sync<N: Network>(
         &self,
         view_key: &ViewKey<N>,
         uuid: &str,
         start_block: u32,
-        poll_interval: Duration,
-        sync_timeout: Duration,
     ) -> Result<()> {
-        timeout(sync_timeout, async {
+        timeout(self.sync_timeout, async {
             let mut re_registered = false;
             loop {
                 let response = self
@@ -111,7 +177,7 @@ impl ScannerClient {
                     .context("failed to check scanner sync status")?;
                 if response.status() == StatusCode::UNPROCESSABLE_ENTITY && !re_registered {
                     // RSS derives the UUID from the view key, so re-registration preserves it.
-                    self.register(view_key, start_block).await?;
+                    self.renew_registration(view_key, uuid, start_block).await?;
                     re_registered = true;
                     continue;
                 }
@@ -120,7 +186,7 @@ impl ScannerClient {
                 if status.synced {
                     return Ok(());
                 }
-                sleep(poll_interval).await;
+                sleep(self.sync_poll_interval).await;
             }
         })
         .await
@@ -139,10 +205,11 @@ impl ScannerClient {
     ) -> Result<Vec<OwnedRecord>> {
         let mut records = Vec::new();
         let mut page = 0;
+        let mut re_registered = false;
 
         loop {
             let body = owned_body(uuid, program, record_name, page);
-            let mut response = self
+            let response = self
                 .client
                 .post(format!("{}/records/owned", self.endpoint))
                 .json(&body)
@@ -152,14 +219,16 @@ impl ScannerClient {
 
             // A process restart can forget the in-memory scanner key.
             if response.status() == StatusCode::UNPROCESSABLE_ENTITY {
-                self.register(view_key, start_block).await?;
-                response = self
-                    .client
-                    .post(format!("{}/records/owned", self.endpoint))
-                    .json(&body)
-                    .send()
-                    .await
-                    .context("failed to retry owned-record fetch")?;
+                if re_registered {
+                    return decode_response(response, "Owned-record fetch after re-registration")
+                        .await;
+                }
+                self.renew_registration(view_key, uuid, start_block).await?;
+                self.wait_for_sync(view_key, uuid, start_block).await?;
+                re_registered = true;
+                records.clear();
+                page = 0;
+                continue;
             }
 
             let mut page_records: Vec<OwnedRecord> =
@@ -209,6 +278,11 @@ impl ScannerClient {
             })
             .collect())
     }
+}
+
+fn scanner_uuid<N: Network>(view_key: &ViewKey<N>) -> Result<String> {
+    let domain = Field::<N>::new_domain_separator(SCANNER_DOMAIN);
+    Ok(N::hash_psd4(&[domain, view_key.to_field()?, Field::<N>::one()])?.to_string())
 }
 
 fn decrypt_records<N: Network>(view_key: &ViewKey<N>, records: &mut [OwnedRecord]) {

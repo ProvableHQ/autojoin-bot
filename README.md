@@ -9,20 +9,23 @@ Programmatic Aleo autojoin bot implementations:
 
 Both language implementations are deliberately one-shot examples. The
 separate CLI provides interactive configuration and foreground or optional
-detached continuous operation.
+detached continuous operation. The CLI uses the scanner as its source of truth;
+its ciphertext and decrypted-record snapshots are independent, opt-in exports
+and are both disabled by default.
 
 Outside of Shield wallet, users interacting with DEX contracts require a programmatic solution for both record management and autojoin.  This repository provides example implementations of an autojoin-bot in both Rust and JS for programmatic traders. Both securely load either a view key or private key from an owner-only file, register the derived view key through the encrypted one-time-key flow, fetch owned records with `unspent: true`, and verify their tags against
-`/records/tags`. The resulting ciphertexts and input-selection metadata are
-stored in an atomic local snapshot without decrypted plaintext. Owner-only
-ciphertext storage is the default but can be relaxed; an optional separate
-decrypted-record snapshot is always owner-only.
+`/records/tags`. Ciphertext and decrypted-record snapshots are independent,
+optional exports and are disabled by default. When enabled, ciphertext
+snapshots default to owner-only permissions (which can be relaxed), while
+decrypted snapshots are always owner-only.
 
-Before reading the initial record set, both clients wait for the scanner's
-`/status` endpoint to report `synced: true`. An empty or single-record result
-is treated as complete only after synchronization. Startup polling and its
-timeout are configured with `SCAN_SYNC_POLL_INTERVAL_MS` (5 seconds) and
-`SCAN_SYNC_TIMEOUT_MS` (5 minutes); a sync failure exits before joining or
-replacing the stored snapshot.
+Before reading records, both clients derive the scanner UUID and inspect
+`/status`. They reuse a synchronized registration, wait without re-registering
+when synchronization is in progress, and register only when the UUID is
+missing. If an owned-record request later reports a missing registration, they
+register once, wait for synchronization, discard partial pages, and restart at
+page zero. Startup polling and its timeout are configured with
+`SCAN_SYNC_POLL_INTERVAL_MS` (5 seconds) and `SCAN_SYNC_TIMEOUT_MS` (5 minutes).
 
 Both implementations can optionally consolidate ALEO credits records using
 the deployed `autojoin_credits_2_10.aleo`, `autojoin_credits_11_14.aleo`, and

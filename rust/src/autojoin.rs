@@ -4,7 +4,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use crypto_box::{PublicKey, aead::OsRng};
 use reqwest::Client;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use snarkvm_circuit_network::Aleo;
 use snarkvm_console::{
@@ -25,7 +25,6 @@ use crate::{
 pub struct DelegatedProverClient {
     client: Client,
     base_url: String,
-    token: Option<Zeroizing<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -34,13 +33,43 @@ struct PubkeyResponse {
     public_key: String,
 }
 
+#[derive(Serialize)]
+struct AuthorizationProvingRequest<T> {
+    broadcast: bool,
+    payload: AuthorizationPayload<T>,
+}
+
+#[derive(Serialize)]
+struct AuthorizationPayload<T> {
+    #[serde(rename = "type")]
+    payload_type: &'static str,
+    authorization: T,
+}
+
+fn authorization_proving_request<T>(authorization: T) -> AuthorizationProvingRequest<T> {
+    AuthorizationProvingRequest {
+        broadcast: true,
+        payload: AuthorizationPayload {
+            payload_type: "authorization",
+            authorization,
+        },
+    }
+}
+
 impl DelegatedProverClient {
-    pub fn new(base_url: String, token: Option<Zeroizing<String>>) -> Self {
+    pub fn new(base_url: String) -> Self {
         Self {
             client: Client::new(),
             base_url,
-            token,
         }
+    }
+
+    fn pubkey_url(&self) -> String {
+        format!("{}/pubkey", self.base_url)
+    }
+
+    fn prove_url(&self) -> String {
+        format!("{}/prove", self.base_url)
     }
 
     pub async fn prove_and_broadcast<N: Network, A: Aleo<Network = N>>(
@@ -77,14 +106,7 @@ impl DelegatedProverClient {
             program_id,
             function_name,
         )?;
-        let request = json!({
-            "broadcast": true,
-            "job_id": format!("{:032x}", rand::random::<u128>()),
-            "payload": {
-                "type": "authorization",
-                "authorization": authorization,
-            }
-        });
+        let request = authorization_proving_request(authorization);
         self.submit(request).await
     }
 
@@ -118,12 +140,8 @@ impl DelegatedProverClient {
         topological_programs(programs)
     }
 
-    async fn submit(&self, request: Value) -> Result<Value> {
-        let mut pubkey_request = self.client.get(format!("{}/pubkey", self.base_url));
-        if let Some(token) = &self.token {
-            pubkey_request = pubkey_request.bearer_auth(token.as_str());
-        }
-        let pubkey_response = pubkey_request.send().await?;
+    async fn submit(&self, request: impl Serialize) -> Result<Value> {
+        let pubkey_response = self.client.get(self.pubkey_url()).send().await?;
         let cookie = pubkey_response
             .headers()
             .get(reqwest::header::SET_COOKIE)
@@ -141,19 +159,15 @@ impl DelegatedProverClient {
             .seal(&mut OsRng, &plaintext)
             .map_err(|error| anyhow!("failed to encrypt delegated proving request: {error}"))?;
 
-        let mut prove_request = self
-            .client
-            .post(format!("{}/prove", self.base_url))
-            .json(&json!({
-                "key_id": pubkey.key_id,
-                "ciphertext": STANDARD.encode(ciphertext),
-            }));
-        if let Some(token) = &self.token {
-            prove_request = prove_request.bearer_auth(token.as_str());
-        }
-        if let Some(cookie) = cookie {
-            prove_request = prove_request.header(reqwest::header::COOKIE, cookie);
-        }
+        let prove_request = self.client.post(self.prove_url()).json(&json!({
+            "key_id": pubkey.key_id,
+            "ciphertext": STANDARD.encode(ciphertext),
+        }));
+        let prove_request = if let Some(cookie) = cookie {
+            prove_request.header(reqwest::header::COOKIE, cookie)
+        } else {
+            prove_request
+        };
         let result: Value =
             decode_response(prove_request.send().await?, "Delegated proving").await?;
         if !broadcast_accepted(&result) {
@@ -310,6 +324,33 @@ pub const fn join_call(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn edge_routes_are_network_scoped() {
+        let client = DelegatedProverClient::new(AleoNetwork::Mainnet.prover_endpoint());
+        assert_eq!(
+            client.pubkey_url(),
+            "https://edge.provable.com/api/prove/mainnet/pubkey"
+        );
+        assert_eq!(
+            client.prove_url(),
+            "https://edge.provable.com/api/prove/mainnet/prove"
+        );
+    }
+
+    #[test]
+    fn proving_request_omits_optional_job_id_for_edge_compatibility() {
+        let request = serde_json::to_value(authorization_proving_request(json!({
+            "requests": [],
+            "transitions": [],
+        })))
+        .unwrap();
+
+        assert_eq!(request["broadcast"], true);
+        assert_eq!(request["payload"]["type"], "authorization");
+        assert!(request.get("job_id").is_none());
+    }
+
     use snarkvm_console::prelude::TestnetV0;
 
     #[test]
