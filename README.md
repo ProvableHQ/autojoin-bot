@@ -1,6 +1,6 @@
 # autojoin-bot
 
-Programmatic Aleo autojoin bot implementations:
+Programmatic Aleo autojoin  implementations:
 
 - [`js/`](js/README.md).
 - [`rust/`](rust/README.md).
