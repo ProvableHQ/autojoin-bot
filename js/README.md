@@ -6,18 +6,23 @@ Requires Node.js 20 or newer.
 npm install
 cp .env.example .env
 umask 077
-printf '%s\n' 'AViewKey1...' > /secure/path/account.viewkey
-chmod 600 /secure/path/account.viewkey
+printf '%s\n' 'APrivateKey1...' > /secure/path/account.privatekey
+chmod 600 /secure/path/account.privatekey
 set -a; source .env; set +a
 npm start
 ```
 
 Required variables:
 
-- Exactly one of `ALEO_VIEW_KEY_FILE` or `ALEO_PRIVATE_KEY_FILE`: absolute path
-  to an account key file. It must be a regular file owned by the current user,
-  grant no group/other access, and not be a symlink. If a private key is given,
-  its view key is derived in process. Mode `0600` is recommended.
+- `ALEO_PRIVATE_KEY_FILE`: absolute path to the private key used for local
+  authorization. Its view key is derived in process. The file must be regular,
+  owned by the current user, grant no group/other access, and not be a symlink.
+  Mode `0600` is recommended.
+
+For a scan-only run, explicitly set every `AUTOJOIN_*` option to `false`, unset
+`ALEO_PRIVATE_KEY_FILE`, and set `ALEO_VIEW_KEY_FILE` to a protected view-key
+file instead. Exactly one key-file setting must be present.
+
 Optional variables:
 
 - `ALEO_NETWORK`: `testnet` (default) or `mainnet`.
@@ -34,14 +39,14 @@ Optional variables:
   ownership disclosure is acceptable.
 - `DECRYPTED_RECORD_STORE_FILE`: optional separate owner-only snapshot that
   includes decrypted records for later transaction construction.
-- `AUTOJOIN_CREDITS`: defaults to `false`. When `true`, repeatedly consolidates
+- `AUTOJOIN_CREDITS`: defaults to `true`. When enabled, repeatedly consolidates
   all unspent `credits.aleo/credits` records and broadcasts through delegated
-  proving. A private key is then required.
-- `AUTOJOIN_USDCX`: defaults to `false`. When `true`, applies the same
+  proving.
+- `AUTOJOIN_USDCX`: defaults to `true`. When enabled, applies the same
   iterative delegated-proving flow to USDCx `Token` records.
 - `AUTOJOIN_ARC20_ETH`, `AUTOJOIN_ARC20_SOL`, and `AUTOJOIN_ARC20_WBTC`:
-  independently enable consolidation for those ARC20 `Token` records on the
-  selected network.
+  each default to `true` and independently control consolidation for those
+  ARC20 `Token` records on the selected network.
 - `AUTOJOIN_POLL_INTERVAL_MS` and `AUTOJOIN_TIMEOUT_MS`: scanner polling
   interval (5 seconds) and per-join timeout (5 minutes).
 

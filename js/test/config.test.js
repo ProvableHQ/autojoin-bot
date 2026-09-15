@@ -6,9 +6,17 @@ import test from "node:test";
 
 import { loadConfig, readSecureKeyFile } from "../src/config.js";
 
+const SCAN_ONLY = {
+  AUTOJOIN_CREDITS: "false",
+  AUTOJOIN_USDCX: "false",
+  AUTOJOIN_ARC20_ETH: "false",
+  AUTOJOIN_ARC20_SOL: "false",
+  AUTOJOIN_ARC20_WBTC: "false",
+};
+
 test("loads Edge scanner configuration for either network", () => {
   const config = loadConfig({
-    ALEO_VIEW_KEY_FILE: "/secure/account.viewkey",
+    ALEO_PRIVATE_KEY_FILE: "/secure/account.privatekey",
     ALEO_NETWORK: "mainnet",
     SCAN_START_BLOCK: "42",
     RECORD_STORE_FILE: "/secure/unspent-records.json",
@@ -18,20 +26,26 @@ test("loads Edge scanner configuration for either network", () => {
   assert.equal(config.scannerUrl, "https://edge.provable.com/api/scanner");
   assert.equal(config.delegatedProvingUrl, "https://edge.provable.com/api/prove/mainnet");
   assert.equal(config.startBlock, 42);
-  assert.equal(config.keyKind, "view");
+  assert.equal(config.keyKind, "private");
+  assert.equal(config.autojoinCredits, true);
+  assert.equal(config.autojoinUsdcx, true);
+  assert.equal(config.autojoinArc20Eth, true);
+  assert.equal(config.autojoinArc20Sol, true);
+  assert.equal(config.autojoinArc20Wbtc, true);
   assert.equal(config.recordStorePrivate, true);
   assert.equal(config.scanSyncPollIntervalMs, 5_000);
   assert.equal(config.scanSyncTimeoutMs, 300_000);
 });
 
 test("record snapshots are optional by default", () => {
-  const config = loadConfig({ ALEO_VIEW_KEY_FILE: "/secure/account.viewkey" });
+  const config = loadConfig({ ALEO_PRIVATE_KEY_FILE: "/secure/account.privatekey" });
   assert.equal(config.recordStoreFile, undefined);
   assert.equal(config.decryptedRecordStoreFile, undefined);
 });
 
 test("decrypted snapshots can be enabled without a ciphertext snapshot", () => {
   const config = loadConfig({
+    ...SCAN_ONLY,
     ALEO_VIEW_KEY_FILE: "/secure/account.viewkey",
     DECRYPTED_RECORD_STORE_FILE: "/secure/decrypted-records.json",
   });
@@ -41,6 +55,7 @@ test("decrypted snapshots can be enabled without a ciphertext snapshot", () => {
 
 test("configures startup sync timing independently of join polling", () => {
   const base = {
+    ...SCAN_ONLY,
     ALEO_VIEW_KEY_FILE: "/secure/key",
     RECORD_STORE_FILE: "/secure/records.json",
   };
@@ -62,6 +77,7 @@ test("configures startup sync timing independently of join polling", () => {
 
 test("limits startup sync timing to the Node timer range", () => {
   const base = {
+    ...SCAN_ONLY,
     ALEO_VIEW_KEY_FILE: "/secure/key",
     RECORD_STORE_FILE: "/secure/records.json",
   };
@@ -80,6 +96,7 @@ test("limits startup sync timing to the Node timer range", () => {
 
 test("rejects invalid network and start block values", () => {
   const base = {
+    ...SCAN_ONLY,
     ALEO_VIEW_KEY_FILE: "/secure/key",
     RECORD_STORE_FILE: "/secure/records.json",
   };
@@ -108,7 +125,7 @@ test("reads only an owner-only regular view-key file", () => {
 });
 
 test("accepts exactly one secure key-file source", () => {
-  const common = { RECORD_STORE_FILE: "/secure/records.json" };
+  const common = { ...SCAN_ONLY, RECORD_STORE_FILE: "/secure/records.json" };
   const privateConfig = loadConfig({ ...common, ALEO_PRIVATE_KEY_FILE: "/secure/private" });
   assert.equal(privateConfig.keyKind, "private");
   assert.equal(privateConfig.keyFile, "/secure/private");
@@ -139,16 +156,14 @@ test("autojoin requires a private key and uses unauthenticated Edge proving", ()
   assert.equal(config.delegatedProvingTokenFile, undefined);
 
   const usdcx = loadConfig({
-    ...common,
-    AUTOJOIN_CREDITS: "false",
+    ...SCAN_ONLY,
     AUTOJOIN_USDCX: "true",
     ALEO_PRIVATE_KEY_FILE: "/secure/private",
   });
   assert.equal(usdcx.autojoinUsdcx, true);
 
   const arc20 = loadConfig({
-    ...common,
-    AUTOJOIN_CREDITS: "false",
+    ...SCAN_ONLY,
     AUTOJOIN_ARC20_ETH: "true",
     ALEO_NETWORK: "testnet",
     ALEO_PRIVATE_KEY_FILE: "/secure/private",

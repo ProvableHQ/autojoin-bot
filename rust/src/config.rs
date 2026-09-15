@@ -50,18 +50,20 @@ impl Config {
             bail!("DECRYPTED_RECORD_STORE_FILE must differ from RECORD_STORE_FILE");
         }
 
-        let autojoin_credits = parse_bool_env("AUTOJOIN_CREDITS", false)?;
-        let autojoin_usdcx = parse_bool_env("AUTOJOIN_USDCX", false)?;
-        let autojoin_arc20_eth = parse_bool_env("AUTOJOIN_ARC20_ETH", false)?;
-        let autojoin_arc20_sol = parse_bool_env("AUTOJOIN_ARC20_SOL", false)?;
-        let autojoin_arc20_wbtc = parse_bool_env("AUTOJOIN_ARC20_WBTC", false)?;
+        let autojoin_credits = parse_bool_env("AUTOJOIN_CREDITS", true)?;
+        let autojoin_usdcx = parse_bool_env("AUTOJOIN_USDCX", true)?;
+        let autojoin_arc20_eth = parse_bool_env("AUTOJOIN_ARC20_ETH", true)?;
+        let autojoin_arc20_sol = parse_bool_env("AUTOJOIN_ARC20_SOL", true)?;
+        let autojoin_arc20_wbtc = parse_bool_env("AUTOJOIN_ARC20_WBTC", true)?;
         let any_arc20 = autojoin_arc20_eth || autojoin_arc20_sol || autojoin_arc20_wbtc;
         let any_autojoin = autojoin_credits || autojoin_usdcx || any_arc20;
         let network: AleoNetwork = env::var("ALEO_NETWORK")
             .unwrap_or_else(|_| "testnet".into())
             .parse()?;
         if any_autojoin && !matches!(key_source, KeySource::PrivateKey(_)) {
-            bail!("autojoin requires ALEO_PRIVATE_KEY_FILE to sign authorizations");
+            bail!(
+                "autojoin requires ALEO_PRIVATE_KEY_FILE; a view key can only be used when every AUTOJOIN_* setting is false"
+            );
         }
         let delegated_proving_url = network.prover_endpoint();
 
