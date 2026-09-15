@@ -19,7 +19,7 @@ pub struct Config {
     pub decrypted_record_store_file: Option<PathBuf>,
     pub record_name: Option<String>,
     pub record_program: Option<String>,
-    pub record_store_file: PathBuf,
+    pub record_store_file: Option<PathBuf>,
     pub record_store_private: bool,
     pub scanner_root: String,
     pub scan_supported_records: bool,
@@ -49,12 +49,11 @@ impl Config {
             (None, Some(path)) => KeySource::PrivateKey(path),
             _ => bail!("exactly one of ALEO_VIEW_KEY_FILE or ALEO_PRIVATE_KEY_FILE is required"),
         };
-        let record_store_file = optional("RECORD_STORE_FILE")
-            .map(PathBuf::from)
-            .context("RECORD_STORE_FILE is required")?;
+        let record_store_file = optional("RECORD_STORE_FILE").map(PathBuf::from);
         let decrypted_record_store_file =
             optional("DECRYPTED_RECORD_STORE_FILE").map(PathBuf::from);
-        if decrypted_record_store_file.as_ref() == Some(&record_store_file) {
+        if decrypted_record_store_file.is_some() && decrypted_record_store_file == record_store_file
+        {
             bail!("DECRYPTED_RECORD_STORE_FILE must differ from RECORD_STORE_FILE");
         }
 
@@ -166,5 +165,23 @@ mod tests {
             "https://edge.provable.com/api/prove/mainnet"
         );
         assert!(Config::from_values(&values).unwrap().record_store_private);
+        assert!(
+            Config::from_values(&values)
+                .unwrap()
+                .record_store_file
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn record_snapshots_are_optional_by_default() {
+        let values = BTreeMap::from([(
+            "ALEO_VIEW_KEY_FILE".to_owned(),
+            "/secure/view.key".to_owned(),
+        )]);
+        let config = Config::from_values(&values).unwrap();
+
+        assert!(config.record_store_file.is_none());
+        assert!(config.decrypted_record_store_file.is_none());
     }
 }

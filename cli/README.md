@@ -49,6 +49,12 @@ required `test_` prefixes automatically.
 Mainnet is the default network both in the wizard and when `ALEO_NETWORK` is
 omitted from a hand-written configuration.
 
+Local record snapshots are disabled by default because the record scanner is
+the source of truth. During setup, leave both snapshot prompts blank to save no
+record files. `RECORD_STORE_FILE` optionally enables a ciphertext-only snapshot;
+`DECRYPTED_RECORD_STORE_FILE` independently enables an owner-only snapshot that
+also contains decrypted plaintext.
+
 Autojoin always uses the free, unauthenticated Edge delegated-proving service.
 The network-specific base URL is selected automatically:
 

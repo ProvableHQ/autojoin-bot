@@ -80,12 +80,16 @@ pub fn init(path: &Path, force: bool) -> Result<()> {
     let key_method = prompt_choice("Provide key by", &["paste", "file"], "paste")?;
     let key_path = configure_key(path, &network, &key_kind, &key_method)?;
     let start_block = prompt_u64("Scanner start block", 0)?;
-    let record_store = prompt_default(
-        "Ciphertext record store",
-        &format!("./records-{network}.json"),
-    )?;
-    let decrypted_store = prompt("Decrypted record store (blank to disable)")?;
-    let private_ciphertexts = prompt_bool("Restrict ciphertext store to its owner", true)?;
+    let record_store = prompt("Ciphertext record snapshot (blank to disable)")?;
+    let private_ciphertexts = if record_store.is_empty() {
+        None
+    } else {
+        Some(prompt_bool(
+            "Restrict ciphertext snapshot to its owner",
+            true,
+        )?)
+    };
+    let decrypted_store = prompt("Decrypted record snapshot (blank to disable)")?;
 
     let mut values = BTreeMap::new();
     values.insert("ALEO_NETWORK", network);
@@ -99,8 +103,13 @@ pub fn init(path: &Path, force: bool) -> Result<()> {
         key_path,
     );
     values.insert("SCAN_START_BLOCK", start_block.to_string());
-    values.insert("RECORD_STORE_FILE", record_store);
-    values.insert("RECORD_STORE_PRIVATE", private_ciphertexts.to_string());
+    if !record_store.is_empty() {
+        values.insert("RECORD_STORE_FILE", record_store);
+        values.insert(
+            "RECORD_STORE_PRIVATE",
+            private_ciphertexts.unwrap_or(true).to_string(),
+        );
+    }
     if !decrypted_store.is_empty() {
         values.insert("DECRYPTED_RECORD_STORE_FILE", decrypted_store);
     }

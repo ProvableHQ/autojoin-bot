@@ -33,7 +33,7 @@ pub struct RunSummary {
     pub arc20_eth_joins: usize,
     pub arc20_sol_joins: usize,
     pub arc20_wbtc_joins: usize,
-    pub record_store: PathBuf,
+    pub record_store: Option<PathBuf>,
     pub decrypted_record_store: Option<PathBuf>,
 }
 
@@ -365,24 +365,31 @@ pub async fn run_once(config: &Config) -> Result<RunSummary> {
         AleoNetwork::Mainnet => run::<MainnetV0, AleoV0>(config).await?,
         AleoNetwork::Testnet => run::<TestnetV0, AleoTestnetV0>(config).await?,
     };
-    write_record_store(
-        &config.record_store_file,
-        config.network,
-        &result.uuid,
-        &result.records,
-        RecordStoreOptions {
-            secure: config.record_store_private,
-            include_plaintext: false,
-        },
-    )?;
-    event(
-        LogLevel::Info,
-        format_args!(
-            "ciphertext record store updated path={} records={}",
-            config.record_store_file.display(),
-            result.records.len()
-        ),
-    );
+    if let Some(path) = &config.record_store_file {
+        write_record_store(
+            path,
+            config.network,
+            &result.uuid,
+            &result.records,
+            RecordStoreOptions {
+                secure: config.record_store_private,
+                include_plaintext: false,
+            },
+        )?;
+        event(
+            LogLevel::Info,
+            format_args!(
+                "ciphertext record store updated path={} records={}",
+                path.display(),
+                result.records.len()
+            ),
+        );
+    } else {
+        event(
+            LogLevel::Info,
+            format_args!("ciphertext record store disabled"),
+        );
+    }
     if let Some(path) = &config.decrypted_record_store_file {
         write_record_store(
             path,
