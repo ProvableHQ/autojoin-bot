@@ -8,6 +8,10 @@ function fakeSdk(overrides = {}) {
 
   class RecordScanner {
     constructor(options) { calls.push(["scanner", options]); }
+    computeUUID(viewKey) {
+      calls.push(["compute-uuid", viewKey]);
+      return { toString: () => "123field" };
+    }
     async register(viewKey, startBlock) {
       calls.push(["register", viewKey, startBlock]);
       return overrides.registration ?? { ok: true, data: { uuid: "123field" } };
@@ -56,10 +60,10 @@ test("registers, requests unspent owned records, and rejects tags seen in inputs
   assert.deepEqual(options, {
     url: "https://edge.provable.com/api/scanner",
     viewKeys: [viewKey],
-    autoReRegister: true,
+    autoReRegister: false,
     decryptEnabled: true,
   });
-  assert.deepEqual(calls[1], ["register", viewKey, 12]);
+  assert.deepEqual(calls[1], ["compute-uuid", viewKey]);
   assert.deepEqual(calls[2], ["status", "123field"]);
   assert.deepEqual(calls[3], ["owned", {
     uuid: "123field",
@@ -156,7 +160,7 @@ test("times out without reading partial records and releases the view key", asyn
     scannerUrl: "https://scanner.example",
     syncPollIntervalMs: 1_000,
     syncTimeoutMs: 20,
-  }), /timed out waiting for initial scanner synchronization/);
+  }), /timed out waiting for scanner synchronization/);
   assert.equal(calls.some(([name]) => name === "owned"), false);
   assert.deepEqual(calls.at(-1), ["free-view-key"]);
 });
@@ -174,7 +178,7 @@ test("re-registers once on a 422 sync status using the configured start block", 
     startBlock: 42,
   });
   assert.deepEqual(calls.filter(([name]) => name === "register"), [
-    ["register", viewKey, 42], ["register", viewKey, 42],
+    ["register", viewKey, 42],
   ]);
 });
 
@@ -197,6 +201,7 @@ for (const [description, status, error] of [
 
 test("surfaces registration failures and destroys account key material", async () => {
   const { sdk, calls } = fakeSdk({
+    status: () => ({ ok: false, status: 422, error: { message: "not registered" } }),
     registration: { ok: false, status: 401, error: { message: "unauthorized" } },
   });
   const viewKey = { free: () => calls.push(["free-view-key"]) };
@@ -210,4 +215,43 @@ test("surfaces registration failures and destroys account key material", async (
     /registration failed \(HTTP 401\): unauthorized/,
   );
   assert.deepEqual(calls.at(-1), ["free-view-key"]);
+});
+
+test("a 422 owned response waits for sync and restarts pagination", async () => {
+  const firstPage = Array.from({ length: 1000 }, (_, index) => ({
+    commitment: `old-${index}`,
+  }));
+  const ownedResponses = [
+    { ok: true, data: firstPage },
+    { ok: false, status: 422, error: { message: "not registered" } },
+    { ok: true, data: [{ commitment: "replacement" }] },
+  ];
+  const statuses = [
+    { ok: true, data: { synced: false } },
+    { ok: true, data: { synced: true } },
+  ];
+  const { sdk, calls } = fakeSdk({
+    owned: () => ownedResponses.shift(),
+    status: () => statuses.shift(),
+  });
+  const viewKey = { free() {} };
+
+  const result = await registerAndFetchUnspentRecords({
+    sdk,
+    viewKey,
+    scannerUrl: "https://scanner.example",
+    waitForSync: false,
+    syncPollIntervalMs: 1,
+    syncTimeoutMs: 1_000,
+  });
+
+  assert.deepEqual(result.records, [{ commitment: "replacement" }]);
+  assert.deepEqual(
+    calls.filter(([name]) => name === "owned").map(([, filter]) => filter.filter.page),
+    [0, 1, 0],
+  );
+  assert.deepEqual(calls.filter(([name]) => name === "register"), [
+    ["register", viewKey, 0],
+  ]);
+  assert.equal(calls.filter(([name]) => name === "status").length, 2);
 });

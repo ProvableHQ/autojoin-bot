@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import test from "node:test";
-import { cryptoBoxKeyPair } from "@serenity-kit/noble-sodium";
 
 import { loadSdk } from "../src/config.js";
 import { registerAndFetchUnspentRecords } from "../src/scanner.js";
@@ -10,7 +9,6 @@ test("startup timeout aborts a stalled status body through the real SDK", { time
   const sdk = await loadSdk("testnet");
   const privateKey = new sdk.PrivateKey();
   const viewKey = sdk.ViewKey.from_private_key(privateKey);
-  const keys = cryptoBoxKeyPair();
   const requests = [];
   let freed = false;
   const free = viewKey.free.bind(viewKey);
@@ -19,14 +17,7 @@ test("startup timeout aborts a stalled status body through the real SDK", { time
     requests.push(request.url);
     for await (const _chunk of request) { /* Consume the request body. */ }
     response.setHeader("Content-Type", "application/json");
-    if (request.url === "/testnet/pubkey") {
-      response.end(JSON.stringify({
-        key_id: "test-key",
-        public_key: Buffer.from(keys.publicKey).toString("base64"),
-      }));
-    } else if (request.url === "/testnet/register/encrypted") {
-      response.end(JSON.stringify({ uuid: "123field" }));
-    } else if (request.url === "/testnet/status") {
+    if (request.url === "/testnet/status") {
       // Send headers and an incomplete body: the timeout must cover body reads.
       response.write("{");
     } else {
@@ -41,10 +32,8 @@ test("startup timeout aborts a stalled status body through the real SDK", { time
       scannerUrl: `http://127.0.0.1:${server.address().port}`,
       syncPollIntervalMs: 1,
       syncTimeoutMs: 100,
-    }), /timed out waiting for initial scanner synchronization/);
-    assert.deepEqual(requests, [
-      "/testnet/pubkey", "/testnet/register/encrypted", "/testnet/status",
-    ]);
+    }), /timed out waiting for scanner synchronization/);
+    assert.deepEqual(requests, ["/testnet/status"]);
     assert.equal(freed, true);
   } finally {
     server.closeAllConnections();

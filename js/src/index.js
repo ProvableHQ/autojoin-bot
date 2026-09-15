@@ -44,9 +44,6 @@ async function main() {
       [config.autojoinArc20Wbtc, "arc20Wbtc"],
     ].filter(([enabled]) => enabled);
     if (enabledFamilies.length > 0) {
-      const proverToken = config.delegatedProvingTokenFile
-        ? readSecureKeyFile(config.delegatedProvingTokenFile)
-        : undefined;
       const runFamily = async (family) => {
         const familyScan = async () => (await scan({
           recordProgram: family.recordPrograms[config.network],
@@ -59,7 +56,6 @@ async function main() {
           privateKey,
           networkUrl: NETWORK_API_URL,
           proverUrl: config.delegatedProvingUrl,
-          proverToken,
           initialRecords: await familyScan(),
           rescan: familyScan,
           pollIntervalMs: config.autojoinPollIntervalMs,
@@ -74,13 +70,15 @@ async function main() {
   } finally {
     privateKey?.free?.();
   }
-  writeRecordStore({
-    path: config.recordStoreFile,
-    network: config.network,
-    uuid: result.uuid,
-    records: result.records,
-    secure: config.recordStorePrivate,
-  });
+  if (config.recordStoreFile) {
+    writeRecordStore({
+      path: config.recordStoreFile,
+      network: config.network,
+      uuid: result.uuid,
+      records: result.records,
+      secure: config.recordStorePrivate,
+    });
+  }
   if (config.decryptedRecordStoreFile) {
     writeRecordStore({
       path: config.decryptedRecordStoreFile,
@@ -101,8 +99,8 @@ async function main() {
     arc20EthJoins: joinCounts.arc20Eth,
     arc20SolJoins: joinCounts.arc20Sol,
     arc20WbtcJoins: joinCounts.arc20Wbtc,
-    recordStore: config.recordStoreFile,
-    decryptedRecordStore: config.decryptedRecordStoreFile,
+    recordStore: config.recordStoreFile ?? null,
+    decryptedRecordStore: config.decryptedRecordStoreFile ?? null,
   }, null, 2)}\n`);
 }
 

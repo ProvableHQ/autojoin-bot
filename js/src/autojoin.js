@@ -1,4 +1,3 @@
-import { randomBytes } from "node:crypto";
 import { cryptoBoxSeal } from "@serenity-kit/noble-sodium";
 
 const CREDITS_PROGRAM = "credits.aleo";
@@ -112,21 +111,16 @@ export function creditsRecords(records) {
   return recordsForFamily(records, JOIN_FAMILIES.credits);
 }
 
-export function canonicalProvingRequest(provingRequest, jobId = randomBytes(16).toString("hex")) {
+export function canonicalProvingRequest(provingRequest) {
   const legacy = JSON.parse(provingRequest.toString());
   if (!legacy.authorization) throw new Error("SDK did not build an authorization proving request");
   return {
     broadcast: true,
-    job_id: jobId,
     payload: {
       type: "authorization",
       authorization: legacy.authorization,
     },
   };
-}
-
-function authHeaders(token) {
-  return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
 function acceptedBroadcast(result) {
@@ -135,9 +129,8 @@ function acceptedBroadcast(result) {
     || (value && typeof value === "object" && "Accepted" in value);
 }
 
-export async function submitDelegated({ url, token, request, fetchImpl = fetch }) {
-  const headers = authHeaders(token);
-  const pubkeyResponse = await fetchImpl(`${url}/pubkey`, { headers });
+export async function submitDelegated({ url, request, fetchImpl = fetch }) {
+  const pubkeyResponse = await fetchImpl(`${url}/pubkey`);
   if (!pubkeyResponse.ok) {
     throw new Error(`Delegated-prover public-key request failed (HTTP ${pubkeyResponse.status}): ${await pubkeyResponse.text()}`);
   }
@@ -156,7 +149,6 @@ export async function submitDelegated({ url, token, request, fetchImpl = fetch }
   const response = await fetchImpl(`${url}/prove`, {
     method: "POST",
     headers: {
-      ...headers,
       "Content-Type": "application/json",
       ...(cookie ? { Cookie: cookie } : {}),
     },
@@ -185,7 +177,6 @@ export async function consolidateRecords({
   privateKey,
   networkUrl,
   proverUrl,
-  proverToken,
   initialRecords,
   rescan,
   pollIntervalMs,
@@ -228,7 +219,6 @@ export async function consolidateRecords({
     try {
       await submit({
         url: proverUrl,
-        token: proverToken,
         request: canonicalProvingRequest(provingRequest),
       });
     } finally {

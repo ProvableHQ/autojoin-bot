@@ -13,20 +13,22 @@ declares and re-exports those modules.
 ```sh
 cp .env.example .env
 umask 077
-printf '%s\n' 'AViewKey1...' > /secure/path/account.viewkey
-chmod 600 /secure/path/account.viewkey
+printf '%s\n' 'APrivateKey1...' > /secure/path/account.privatekey
+chmod 600 /secure/path/account.privatekey
 set -a; source .env; set +a
 cargo run --release
 ```
 
 Required variables:
 
-- Exactly one of `ALEO_VIEW_KEY_FILE` or `ALEO_PRIVATE_KEY_FILE`: absolute path
-  to an account key file. It must be a regular file owned by the current user,
-  grant no group/other permissions, and not be a symlink. If a private key is
-  given, its view key is derived in process. Mode `0600` is recommended.
-- `RECORD_STORE_FILE`: destination for the local unspent-record snapshot. Its
-  default privacy behavior is controlled by `RECORD_STORE_PRIVATE`.
+- `ALEO_PRIVATE_KEY_FILE`: absolute path to the private key used for local
+  authorization. Its view key is derived in process. The file must be regular,
+  owned by the current user, grant no group/other permissions, and not be a
+  symlink. Mode `0600` is recommended.
+
+For a scan-only run, explicitly set every `AUTOJOIN_*` option to `false`, unset
+`ALEO_PRIVATE_KEY_FILE`, and set `ALEO_VIEW_KEY_FILE` to a protected view-key
+file instead. Exactly one key-file setting must be present.
 
 Optional variables:
 
@@ -36,31 +38,33 @@ Optional variables:
   (5 seconds) and timeout (5 minutes) for initial scanner synchronization.
   Increase the timeout for accounts with a long scan history.
 - `RECORD_PROGRAM` and `RECORD_NAME`: narrow the returned record set.
-- `RECORD_STORE_PRIVATE`: defaults to `true`, enforcing an owner-only file and
-  protected parent. Set to `false` when ownership disclosure is acceptable.
+- `RECORD_STORE_FILE`: optionally export the current unspent ciphertexts to an
+  atomic local snapshot. No snapshot is saved when this is unset.
+- `RECORD_STORE_PRIVATE`: defaults to `true` when `RECORD_STORE_FILE` is set,
+  enforcing an owner-only file and protected parent. Set to `false` when
+  ownership disclosure is acceptable.
 - `DECRYPTED_RECORD_STORE_FILE`: optional separate owner-only snapshot that
   includes decrypted records for later transaction construction.
-- `AUTOJOIN_CREDITS`: defaults to `false`. When `true`, repeatedly consolidates
+- `AUTOJOIN_CREDITS`: defaults to `true`. When enabled, repeatedly consolidates
   all unspent `credits.aleo/credits` records and broadcasts through delegated
-  proving. A private key and `DELEGATED_PROVING_URL` are then required.
-- `AUTOJOIN_USDCX`: defaults to `false`. When `true`, applies the same
+  proving.
+- `AUTOJOIN_USDCX`: defaults to `true`. When enabled, applies the same
   iterative delegated-proving flow to USDCx `Token` records.
 - `AUTOJOIN_ARC20_ETH`, `AUTOJOIN_ARC20_SOL`, and `AUTOJOIN_ARC20_WBTC`:
-  independently enable consolidation for those ARC20 `Token` records on the
-  selected network.
-- `DELEGATED_PROVING_TOKEN_FILE`: optional owner-only file containing the
-  prover bearer token. The token is never accepted directly from the command
-  line or environment.
+  each default to `true` and independently control consolidation for those
+  ARC20 `Token` records on the selected network.
 - `AUTOJOIN_POLL_INTERVAL_MS` and `AUTOJOIN_TIMEOUT_MS`: scanner polling
   interval (5 seconds) and per-join timeout (5 minutes).
 
-Before the first owned-record read, the client polls `/status` until it reports
-`synced: true`. This also applies in scan-only mode. Zero or one records are
-valid final results only after that wait. A timeout or status error exits
-before any autojoin is authorized or an existing record snapshot is replaced.
-The timeout covers status requests and polling delays. HTTP 422 triggers one
-encrypted re-registration with the configured `SCAN_START_BLOCK` and a retry.
-Subsequent scans in the same run use the existing join polling flow.
+The client derives the deterministic scanner UUID, checks `/status`, and reuses
+an existing registration. If it is still syncing, the client waits for
+`synced: true` without resetting its progress; only a missing registration is
+registered with `SCAN_START_BLOCK`. This also applies in scan-only mode. Zero
+or one records are valid final results only after synchronization. A timeout or
+status error exits before any autojoin is authorized or snapshot is replaced.
+If `/records/owned` returns HTTP 422, the client registers once, waits for the
+replacement scan to synchronize, discards partial pagination results, and
+restarts at page zero.
 
 For 2–10 inputs the client calls `autojoin_credits_2_10.aleo/join_N`; for
 11–14 it calls `autojoin_credits_11_14.aleo/join_N`; and for 15–16 it calls
@@ -71,8 +75,8 @@ tag before authorizing the next join.
 
 The caller signs a full authorization locally, including nested
 `credits.aleo/join` requests. The authorization is wrapped in the delegated
-proving service's canonical JSON `ProvingRequest`, assigned a random 128-bit
-job ID, sealed to a one-time `/pubkey`, and sent to `POST /prove` with
+proving service's canonical JSON `ProvingRequest`, sealed to a one-time
+`/pubkey`, and sent to `POST /prove` with
 `broadcast: true`. The fee is omitted so the configured delegated prover fee
 master pays it. snarkVM is used only for local authorization; proof generation
 remains delegated.
@@ -96,19 +100,26 @@ The selected endpoint is
 `https://edge.provable.com/api/scanner/{mainnet|testnet}`. Edge is used as an
 unauthenticated free-tier service; no API key is sent. Results from
 `/records/owned` are paginated and their tags are checked in batches against
-`/records/tags`. An HTTP 422 during an owned-record read triggers one encrypted
-re-registration and retry, matching the scanner's restart contract.
+`/records/tags`.
+
+Delegated proving uses the fixed unauthenticated Edge endpoint
+`https://edge.provable.com/api/prove/{mainnet|testnet}`. Its request body omits
+the not-yet-deployed `job_id` field.
 
 Key material is never accepted directly through an environment variable or
 command-line argument. The file is opened with `O_NOFOLLOW | O_CLOEXEC`,
 validated through the opened descriptor to avoid path races, bounded to 512
 bytes, and held in zeroizing memory while it is parsed.
 
-Each successful scan atomically replaces the ciphertext snapshot with the
-current unspent set. It contains public ciphertexts plus selection metadata,
-but never plaintext. The default remains private because collecting those
-ciphertexts under one UUID reveals ownership; this check can be disabled.
+When `RECORD_STORE_FILE` is set, each successful scan atomically replaces that
+ciphertext snapshot with the current unspent set. It contains public
+ciphertexts plus selection metadata, but never plaintext. It defaults to
+owner-only because collecting those ciphertexts under one UUID reveals
+ownership; this check can be disabled. No ciphertext snapshot is saved by
+default.
 
 When `DECRYPTED_RECORD_STORE_FILE` is set, a second snapshot includes plaintext
 for transaction construction and always requires an owner-only directory and
-mode `0600`. Standard output never contains records from either store.
+mode `0600`. This snapshot is independent of `RECORD_STORE_FILE`; both exports
+are disabled by default. Standard output never contains records from either
+store.

@@ -3,6 +3,7 @@ import test from "node:test";
 import { cryptoBoxKeyPair, cryptoBoxSealOpen } from "@serenity-kit/noble-sodium";
 
 import {
+  canonicalProvingRequest,
   consolidateCredits,
   creditsJoinCall,
   JOIN_FAMILIES,
@@ -206,7 +207,6 @@ test("seals canonical JSON for /prove and preserves affinity cookie", async () =
   const keys = cryptoBoxKeyPair();
   const provingRequest = {
     broadcast: true,
-    job_id: "00112233445566778899aabbccddeeff",
     payload: { type: "authorization", authorization: { requests: [] } },
   };
   const calls = [];
@@ -237,10 +237,18 @@ test("seals canonical JSON for /prove and preserves affinity cookie", async () =
 
   await submitDelegated({
     url: "https://prover.example",
-    token: "secret-token",
     request: provingRequest,
     fetchImpl,
   });
-  assert.equal(calls[0][1].headers.Authorization, "Bearer secret-token");
+  assert.deepEqual(calls[0][1], {});
   assert.equal(calls[1][0], "https://prover.example/prove");
+});
+
+test("canonical proving requests omit job_id", () => {
+  const request = canonicalProvingRequest({
+    toString: () => JSON.stringify({ authorization: { requests: [] } }),
+  });
+  assert.equal(request.broadcast, true);
+  assert.equal(request.payload.type, "authorization");
+  assert.equal("job_id" in request, false);
 });

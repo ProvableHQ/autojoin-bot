@@ -106,6 +106,9 @@ impl DelegatedProverClient {
             program_id,
             function_name,
         )?;
+        // `job_id` is optional in the canonical delegated-proving schema. Edge
+        // deployments predating durable jobs reject it because they deny
+        // unknown top-level fields, so omit it for cross-version compatibility.
         let request = authorization_proving_request(authorization);
         self.submit(request).await
     }
@@ -265,7 +268,8 @@ fn broadcast_accepted(result: &Value) -> bool {
     })
 }
 
-pub const fn credits_join_call(count: usize) -> Option<(&'static str, &'static str)> {
+#[cfg(test)]
+const fn credits_join_call(count: usize) -> Option<(&'static str, &'static str)> {
     join_call(RecordFamily::Credits, AleoNetwork::Mainnet, count)
 }
 

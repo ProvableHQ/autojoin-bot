@@ -10,8 +10,8 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use crypto_box::{SecretKey, aead::OsRng};
 use serde_json::{Value, json};
 use snarkvm_console::{
-    account::{PrivateKey, ViewKey},
-    prelude::TestnetV0,
+    account::{Field, PrivateKey, ViewKey},
+    prelude::{Network, One, TestnetV0, ToField},
 };
 
 const UUID: &str = "123field";
@@ -34,9 +34,21 @@ fn response(path: &'static str, status: u16, body: Value) -> Response {
 
 // Exercise the real HTTP client, including JSON request bodies and cancellation.
 fn server(responses: Vec<Response>) -> (ScannerClient, thread::JoinHandle<Vec<Value>>) {
+    server_with_timing(responses, Duration::from_millis(1), Duration::from_secs(5))
+}
+
+fn server_with_timing(
+    responses: Vec<Response>,
+    poll_interval: Duration,
+    sync_timeout: Duration,
+) -> (ScannerClient, thread::JoinHandle<Vec<Value>>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
-    let client = ScannerClient::new(format!("http://{}", listener.local_addr().unwrap()));
+    let client = ScannerClient::new(
+        format!("http://{}", listener.local_addr().unwrap()),
+        poll_interval,
+        sync_timeout,
+    );
     let handle = thread::spawn(move || {
         let mut bodies = Vec::new();
         for response in responses {
@@ -73,10 +85,10 @@ fn server(responses: Vec<Response>) -> (ScannerClient, thread::JoinHandle<Vec<Va
                 if line == "\r\n" {
                     break;
                 }
-                if let Some((name, value)) = line.split_once(':') {
-                    if name.eq_ignore_ascii_case("content-length") {
-                        content_length = value.trim().parse::<usize>().unwrap();
-                    }
+                if let Some((name, value)) = line.split_once(':')
+                    && name.eq_ignore_ascii_case("content-length")
+                {
+                    content_length = value.trim().parse::<usize>().unwrap();
                 }
             }
             let mut body = vec![0; content_length];
@@ -107,6 +119,31 @@ fn view_key() -> ViewKey<TestnetV0> {
     ViewKey::try_from(&private_key).unwrap()
 }
 
+fn scanner_uuid(view_key: &ViewKey<TestnetV0>) -> String {
+    let domain = Field::<TestnetV0>::new_domain_separator("RecordScannerV0");
+    TestnetV0::hash_psd4(&[
+        domain,
+        view_key.to_field().unwrap(),
+        Field::<TestnetV0>::one(),
+    ])
+    .unwrap()
+    .to_string()
+}
+
+#[tokio::test]
+async fn syncing_registration_is_polled_without_reregistering() {
+    let key = view_key();
+    let uuid = scanner_uuid(&key);
+    let (client, server) = server(vec![
+        response("/status", 200, json!({ "synced": false })),
+        response("/status", 200, json!({ "synced": true })),
+    ]);
+
+    assert_eq!(client.ensure_ready(&key, 42).await.unwrap(), uuid);
+    let requests = server.join().unwrap();
+    assert_eq!(requests, vec![json!(uuid), json!(uuid)]);
+}
+
 #[tokio::test]
 async fn waits_for_synced_before_reading_the_initial_snapshot() {
     let (client, server) = server(vec![
@@ -129,16 +166,7 @@ async fn waits_for_synced_before_reading_the_initial_snapshot() {
         ),
     ]);
     let key = view_key();
-    client
-        .wait_for_sync(
-            &key,
-            UUID,
-            42,
-            Duration::from_millis(1),
-            Duration::from_secs(5),
-        )
-        .await
-        .unwrap();
+    client.wait_for_sync(&key, UUID, 42).await.unwrap();
     let records = client
         .fetch_unspent(&key, UUID, 42, None, None)
         .await
@@ -163,16 +191,7 @@ async fn synchronized_empty_and_single_record_accounts_finish_normally() {
         }
         let (client, server) = server(responses);
         let key = view_key();
-        client
-            .wait_for_sync(
-                &key,
-                UUID,
-                0,
-                Duration::from_secs(1),
-                Duration::from_secs(5),
-            )
-            .await
-            .unwrap();
+        client.wait_for_sync(&key, UUID, 0).await.unwrap();
         assert_eq!(
             client
                 .fetch_unspent(&key, UUID, 0, None, None)
@@ -190,15 +209,13 @@ async fn startup_timeout_cancels_both_polling_and_a_stalled_http_response() {
     for response_delay in [Duration::ZERO, Duration::from_millis(200)] {
         let mut pending = response("/status", 200, json!({ "synced": false }));
         pending.delay = response_delay;
-        let (client, server) = server(vec![pending]);
+        let (client, server) = server_with_timing(
+            vec![pending],
+            Duration::from_secs(10),
+            Duration::from_millis(100),
+        );
         let error = client
-            .wait_for_sync(
-                &view_key(),
-                UUID,
-                0,
-                Duration::from_secs(10),
-                Duration::from_millis(100),
-            )
+            .wait_for_sync(&view_key(), UUID, 0)
             .await
             .unwrap_err();
         assert!(
@@ -218,13 +235,7 @@ async fn status_errors_and_missing_flags_fail_without_reading_records() {
     ] {
         let (client, server) = server(vec![response("/status", status, body)]);
         let error = client
-            .wait_for_sync(
-                &view_key(),
-                UUID,
-                0,
-                Duration::from_millis(1),
-                Duration::from_secs(5),
-            )
+            .wait_for_sync(&view_key(), UUID, 0)
             .await
             .unwrap_err();
         assert!(
@@ -240,6 +251,8 @@ async fn status_422_re_registers_once_with_the_original_start_block() {
     let secret_key = SecretKey::generate(&mut OsRng);
     let public_key = secret_key.public_key();
     for repeated_422 in [false, true] {
+        let key = view_key();
+        let uuid = scanner_uuid(&key);
         let (client, server) = server(vec![
             response("/status", 422, json!({ "message": "not registered" })),
             response(
@@ -247,7 +260,7 @@ async fn status_422_re_registers_once_with_the_original_start_block() {
                 200,
                 json!({ "key_id": "test-key", "public_key": STANDARD.encode(public_key.as_bytes()) }),
             ),
-            response("/register/encrypted", 200, json!({ "uuid": UUID })),
+            response("/register/encrypted", 200, json!({ "uuid": uuid.clone() })),
             response(
                 "/status",
                 if repeated_422 { 422 } else { 200 },
@@ -258,15 +271,7 @@ async fn status_422_re_registers_once_with_the_original_start_block() {
                 },
             ),
         ]);
-        let result = client
-            .wait_for_sync(
-                &view_key(),
-                UUID,
-                42,
-                Duration::from_millis(1),
-                Duration::from_secs(5),
-            )
-            .await;
+        let result = client.wait_for_sync(&key, &uuid, 42).await;
         if repeated_422 {
             assert!(result.unwrap_err().to_string().contains("HTTP 422"));
         } else {
@@ -279,4 +284,53 @@ async fn status_422_re_registers_once_with_the_original_start_block() {
         let plaintext = secret_key.unseal(&encrypted).unwrap();
         assert_eq!(&plaintext[plaintext.len() - 4..], &42u32.to_le_bytes());
     }
+}
+
+#[tokio::test]
+async fn owned_422_discards_partial_pages_and_restarts_after_sync() {
+    let key = view_key();
+    let uuid = scanner_uuid(&key);
+    let secret_key = SecretKey::generate(&mut OsRng);
+    let public_key = secret_key.public_key();
+    let first_page: Vec<_> = (0..1000)
+        .map(|index| json!({ "commitment": format!("old-{index}") }))
+        .collect();
+    let (client, server) = server(vec![
+        response("/records/owned", 200, json!(first_page)),
+        response(
+            "/records/owned",
+            422,
+            json!({ "message": "not registered" }),
+        ),
+        response(
+            "/pubkey",
+            200,
+            json!({
+                "key_id": "test-key",
+                "public_key": STANDARD.encode(public_key.as_bytes()),
+            }),
+        ),
+        response("/register/encrypted", 200, json!({ "uuid": uuid.clone() })),
+        response("/status", 200, json!({ "synced": false })),
+        response("/status", 200, json!({ "synced": true })),
+        response(
+            "/records/owned",
+            200,
+            json!([{ "commitment": "replacement" }]),
+        ),
+    ]);
+
+    let records = client
+        .fetch_unspent(&key, &uuid, 42, None, None)
+        .await
+        .unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].commitment.as_deref(), Some("replacement"));
+
+    let requests = server.join().unwrap();
+    assert_eq!(requests[0]["filter"]["page"], 0);
+    assert_eq!(requests[1]["filter"]["page"], 1);
+    assert_eq!(requests[6]["filter"]["page"], 0);
+    assert_eq!(requests[4], json!(uuid));
+    assert_eq!(requests[5], json!(uuid));
 }

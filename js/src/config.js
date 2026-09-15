@@ -3,6 +3,7 @@ import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync } fr
 import { validateTimerDelay } from "./timing.js";
 
 const SCANNER_URL = "https://edge.provable.com/api/scanner";
+const PROVER_URL = "https://edge.provable.com/api/prove";
 const MAX_VIEW_KEY_FILE_BYTES = 512;
 
 function parseStartBlock(value) {
@@ -46,32 +47,22 @@ export function loadConfig(env = process.env) {
     throw new Error("exactly one of ALEO_VIEW_KEY_FILE or ALEO_PRIVATE_KEY_FILE is required");
   }
   const recordStoreFile = env.RECORD_STORE_FILE?.trim();
-  if (!recordStoreFile) throw new Error("RECORD_STORE_FILE is required");
   const decryptedRecordStoreFile = env.DECRYPTED_RECORD_STORE_FILE?.trim() || undefined;
-  if (decryptedRecordStoreFile === recordStoreFile) {
+  if (recordStoreFile && decryptedRecordStoreFile === recordStoreFile) {
     throw new Error("DECRYPTED_RECORD_STORE_FILE must differ from RECORD_STORE_FILE");
   }
-  const autojoinCredits = parseBoolean(env.AUTOJOIN_CREDITS, "AUTOJOIN_CREDITS", false);
-  const autojoinUsdcx = parseBoolean(env.AUTOJOIN_USDCX, "AUTOJOIN_USDCX", false);
-  const autojoinArc20Eth = parseBoolean(env.AUTOJOIN_ARC20_ETH, "AUTOJOIN_ARC20_ETH", false);
-  const autojoinArc20Sol = parseBoolean(env.AUTOJOIN_ARC20_SOL, "AUTOJOIN_ARC20_SOL", false);
-  const autojoinArc20Wbtc = parseBoolean(env.AUTOJOIN_ARC20_WBTC, "AUTOJOIN_ARC20_WBTC", false);
+  const autojoinCredits = parseBoolean(env.AUTOJOIN_CREDITS, "AUTOJOIN_CREDITS", true);
+  const autojoinUsdcx = parseBoolean(env.AUTOJOIN_USDCX, "AUTOJOIN_USDCX", true);
+  const autojoinArc20Eth = parseBoolean(env.AUTOJOIN_ARC20_ETH, "AUTOJOIN_ARC20_ETH", true);
+  const autojoinArc20Sol = parseBoolean(env.AUTOJOIN_ARC20_SOL, "AUTOJOIN_ARC20_SOL", true);
+  const autojoinArc20Wbtc = parseBoolean(env.AUTOJOIN_ARC20_WBTC, "AUTOJOIN_ARC20_WBTC", true);
   const anyArc20 = autojoinArc20Eth || autojoinArc20Sol || autojoinArc20Wbtc;
   const anyAutojoin = autojoinCredits || autojoinUsdcx || anyArc20;
-  const delegatedProvingUrl = env.DELEGATED_PROVING_URL?.trim().replace(/\/$/, "") || undefined;
-  const delegatedProvingTokenFile = env.DELEGATED_PROVING_TOKEN_FILE?.trim() || undefined;
+  const delegatedProvingUrl = `${PROVER_URL}/${network}`;
   if (anyAutojoin && !privateKeyFile) {
-    throw new Error("autojoin requires ALEO_PRIVATE_KEY_FILE to sign authorizations");
-  }
-  if (anyAutojoin && !delegatedProvingUrl) {
-    throw new Error("autojoin requires DELEGATED_PROVING_URL");
-  }
-  if (delegatedProvingUrl) {
-    const parsed = new URL(delegatedProvingUrl);
-    const local = parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1";
-    if (parsed.protocol !== "https:" && !(local && parsed.protocol === "http:")) {
-      throw new Error("DELEGATED_PROVING_URL must use HTTPS (HTTP is allowed only for localhost)");
-    }
+    throw new Error(
+      "autojoin requires ALEO_PRIVATE_KEY_FILE; a view key can only be used when every AUTOJOIN_* setting is false",
+    );
   }
 
   return {
@@ -81,7 +72,6 @@ export function loadConfig(env = process.env) {
     autojoinArc20Sol,
     autojoinArc20Wbtc,
     delegatedProvingUrl,
-    delegatedProvingTokenFile,
     autojoinPollIntervalMs: parsePositiveInteger(
       env.AUTOJOIN_POLL_INTERVAL_MS,
       "AUTOJOIN_POLL_INTERVAL_MS",
